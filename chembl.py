@@ -5,14 +5,26 @@ from rdkit import Chem
 import torch
 from tqdm import tqdm
 import numpy as np
+import math
 
 class Chembl:
     URL = "ftp://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_25_chemreps.txt.gz"
     CACHE_DIR = "./cache"
     DOWNLOAD_TO = "./cache/chembl/chembl_25_chemreps.txt.gz"
     PROCESSED_FILE = "./cache/chembl/chembl_25.pth"
+    SPLITS = [0.5, 0.1, 0.4]
+    SETS = ["train", "valid", "test"]
 
-    def __init__(self, max_atoms=20):
+    def _get_split(self, array, set):
+        l = len(array)
+        set_i = self.SETS.index(set)
+        start = 0 if set_i==0 else int(math.ceil(l*self.SPLITS[set_i-1]))
+        end = int(l*self.SPLITS[set_i])
+        return array[start:end]
+
+    def __init__(self, max_atoms=20, set="train"):
+        assert set in self.SETS, "Invalid set: %s" % set
+
         if not os.path.isfile(self.PROCESSED_FILE):
             if not os.path.isfile(self.DOWNLOAD_TO):
                 os.makedirs(os.path.dirname(self.DOWNLOAD_TO), exist_ok=True)
@@ -62,7 +74,9 @@ class Chembl:
         used_smiles = [s for i, s in enumerate(self.dataset["smiles"]) if self.dataset["heavy_atom_count"][i] <= max_atoms]
         self.dataset = used_smiles
 
-        print("Using %d atoms" % len(self.dataset))
+        print("%d atoms match the count limit" % len(self.dataset))
+        self.dataset = self._get_split(self.dataset, set)
+        print("%d atoms used for %s set." % (len(self.dataset), set))
 
 
 
