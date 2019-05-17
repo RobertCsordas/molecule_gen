@@ -6,8 +6,9 @@ import torch
 from tqdm import tqdm
 import numpy as np
 import math
+import torch.utils.data
 
-class Chembl:
+class Chembl(torch.utils.data.Dataset):
     URL = "ftp://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_25_chemreps.txt.gz"
     CACHE_DIR = "./cache"
     DOWNLOAD_TO = "./cache/chembl/chembl_25_chemreps.txt.gz"
@@ -25,7 +26,8 @@ class Chembl:
         end = int(l*self.SPLITS[set_i])
         return array[start:end]
 
-    def __init__(self, max_atoms=20, split="train", random_order=False):
+    def __init__(self, split="train", max_atoms=20, random_order=False):
+        super().__init__()
         assert split in self.SPLIT_NAMES, "Invalid set: %s" % split
 
         if Chembl.dataset is None:
