@@ -14,7 +14,7 @@ class Chembl:
     PROCESSED_FILE = "./cache/chembl/chembl_25.pth"
     SPLITS = [0.5, 0.1, 0.4]
     SPLIT_NAMES = ["train", "valid", "test"]
-    PAD_CHAR = -1
+    PAD_CHAR = 255
 
     dataset = None
 
@@ -147,12 +147,30 @@ class Chembl:
 
         return schema
 
+
+    @staticmethod
+    def onehot(len, index):
+        a = [0]*len
+        a[index] = 1
+        return a
+
     @classmethod
     def batchify(cls, seq_list):
+        # Output data[0] is a list of operations that should be done. Even (0,2,..) elements of the list are the
+        # nodes that should be added, the odd ones (1,3...) are the lists of nodes to be added. Each element of
+        # this list is a touple of (parent node ID, node type). The elements of this tuple are no. of batches long
+        # lists.
+        #
+        # Output data[1] is a tensor with one-hot columns indicating to which batch a the given node belongs to.
+
         res = []
         node_owner_mask = []
 
+        n_seq = len(seq_list)
         longest = max(len(s) for s in seq_list)
+
+        new_node_count = 0
+        node_id_to_new = {}
 
         for i in range(longest):
             if i % 2 == 0:
@@ -163,13 +181,62 @@ class Chembl:
                     if i >= len(s):
                         all_nodes.append(cls.PAD_CHAR)
                     else:
+                        node_id_to_new[(si, i//2)] = new_node_count
+                        new_node_count += 1
                         all_nodes.append(s[i])
+                        node_owner_mask.append(cls.onehot(n_seq, si))
 
+                res.append(all_nodes)
+            else:
+                # It's an edge
 
+                this_edge_set = []
+
+                all_edges = []
+                all_edge_types = []
+
+                max_edges = max(len(s[i]) for s in seq_list if i<len(s))
+
+                for ei in range(max_edges):
+                    for si, s in enumerate(seq_list):
+                        if i >= len(s) or ei >= len(s[i]):
+                            all_edge_types.append(cls.PAD_CHAR)
+                            all_edges.append(0)
+                        else:
+                            all_edges.append(node_id_to_new[(si, s[i][ei][0])])
+                            all_edge_types.append(s[i][ei][1])
+
+                    this_edge_set.append((all_edges, all_edge_types))
+
+                res.append(this_edge_set)
+
+        return res, node_owner_mask
+
+    @staticmethod
+    def to_tensor(batched_seq, owner_mask):
+        res = []
+        for si, s in enumerate(batched_seq):
+            if si % 2 == 0:
+                res.append(torch.tensor(s, dtype=torch.uint8))
+            else:
+                res.append([(torch.tensor(a[0], dtype=torch.uint8), torch.tensor(a[1], dtype=torch.uint8)) for a in s])
+
+        return res, torch.tensor(owner_mask, dtype=torch.uint8)
+
+    @classmethod
+    def collate(cls, seq):
+        return cls.to_tensor(*cls.batchify(seq))
 
 if __name__=="__main__":
     dataset = Chembl()
 
     print(dataset[1])
+    print("-------------------------------------------------------------------------")
     print(dataset[2])
+    print("-------------------------------------------------------------------------")
+    print(dataset.batchify([dataset[1], dataset[2]]))
+    print("-------------------------------------------------------------------------")
+    print(dataset.to_tensor(*dataset.batchify([dataset[1], dataset[2]])))
+
+
 
