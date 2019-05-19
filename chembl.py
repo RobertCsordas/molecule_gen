@@ -229,6 +229,12 @@ class Chembl(torch.utils.data.Dataset):
     def collate(cls, seq):
         return cls.to_tensor(*cls.batchify(seq))
 
+    def n_node_types(self):
+        return len(self.dataset["atom_types"])
+
+    def n_edge_types(self):
+        return len(self.dataset["bond_types"])
+
 if __name__=="__main__":
     dataset = Chembl()
 
