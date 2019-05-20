@@ -184,10 +184,12 @@ class Chembl(torch.utils.data.Dataset):
 
                 all_nodes = []
                 for si, s in enumerate(seq_list):
-                    if i >= len(s):
+                    if i >= len(s) or s[i]==cls.PAD_CHAR:
                         all_nodes.append(cls.PAD_CHAR)
                     else:
-                        node_id_to_new[(si, i//2)] = new_node_count
+                        fasz = (si, i // 2)
+                        assert fasz not in node_id_to_new
+                        node_id_to_new[fasz] = new_node_count
                         new_node_count += 1
                         all_nodes.append(s[i])
                         node_owner_mask.append(cls.onehot(n_seq, si))
@@ -197,13 +199,12 @@ class Chembl(torch.utils.data.Dataset):
                 # It's an edge
 
                 this_edge_set = []
-
-                all_edges = []
-                all_edge_types = []
-
                 max_edges = max(len(s[i]) for s in seq_list if i<len(s))
 
                 for ei in range(max_edges):
+                    all_edges = []
+                    all_edge_types = []
+
                     for si, s in enumerate(seq_list):
                         if i >= len(s) or ei >= len(s[i]):
                             all_edge_types.append(cls.PAD_CHAR)
@@ -239,16 +240,49 @@ class Chembl(torch.utils.data.Dataset):
     def n_edge_types(self):
         return len(self.dataset["bond_types"])
 
+    @staticmethod
+    def verify_links(batched):
+        # Slow, for debug purposes only
+        atom_owner = {}
+        curr_id = 0
+        print("=-=-=-=-=-")
+
+        for i, c in enumerate(batched):
+            if i % 2 == 0:
+                # node
+                for bi, a in enumerate(c):
+                    if a == 255:
+                        continue
+                    atom_owner[curr_id] = bi
+                    curr_id += 1
+
+                    print(a)
+            else:
+                # edge
+                for e in c:
+                    types = e[1]
+                    links = e[0]
+
+                    for bi, l in enumerate(links):
+                        if types[bi] != 255:
+                            assert l in atom_owner, "Link to invalid atom: %l" % l
+                            assert atom_owner[l] == bi, "Atom %d owner: %d != link %d" % (l, atom_owner[l], bi)
+
+
 if __name__=="__main__":
     dataset = Chembl()
+
+    Chembl.verify_links(dataset.batchify([dataset[i] for i in range(3)])[0])
 
     print(dataset[1])
     print("-------------------------------------------------------------------------")
     print(dataset[2])
     print("-------------------------------------------------------------------------")
     print(dataset.batchify([dataset[1], dataset[2]]))
+    Chembl.verify_links(dataset.batchify([dataset[1], dataset[2]])[0])
     print("-------------------------------------------------------------------------")
     print(dataset.to_tensor(*dataset.batchify([dataset[1], dataset[2]])))
+
 
 
 

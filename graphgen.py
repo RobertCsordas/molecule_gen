@@ -76,11 +76,14 @@ class Propagator(torch.nn.Module):
 
     @staticmethod
     def _node_update_mask(graph: Graph, mask_override: torch.ByteTensor):
-        return graph.owner_masks[graph.running if mask_override is not None else mask_override].sum(0)>0
+        return graph.owner_masks[graph.running if mask_override is None else mask_override].sum(0)>0
 
     def forward(self, graph: Graph, mask_override: torch.ByteTensor = None):
         if graph.nodes.shape[0]==0 or graph.edge_features.shape[0]==0:
             return graph
+
+        # TODO remove this
+        assert graph.nodes.ndimension()==2
 
         src_transformed  = self.message_srcnode(graph.nodes)
         dest_transformed  = self.message_srcnode(graph.nodes)
@@ -96,12 +99,14 @@ class Propagator(torch.nn.Module):
         # Sum the messages for each node
         inputs = torch.zeros(graph.nodes.shape[0], self.message_size, device=graph.nodes.device,
                              dtype=graph.nodes.dtype)
+
         inputs.index_add_(0, graph.edge_dest, messages)
 
         # Transform node state of running nodes
         new_nodes = self.node_update_fn(inputs, graph.nodes)
 
         graph.nodes = torch.where(self._node_update_mask(graph, mask_override).unsqueeze(-1), new_nodes, graph.nodes)
+        assert graph.nodes.ndimension() == 2
         return graph
 
 
@@ -206,14 +211,16 @@ class EdgeAdder(torch.nn.Module):
 
         add_index = 0
         while True:
+            assert running.ndimension() == 1
             graph = self.propagator(graph, running)
+
             new_edge_types = self.f_addedge(self.edge_decision_aggregator(graph))
 
             if reference[add_index] is not None:
                 selected_type = remap_pad(reference[add_index][1], self.pad_char)
 
-                print(new_edge_types.shape, selected_type.shape, running.shape)
                 loss = loss + masked_cross_entropy_loss(new_edge_types, None, selected_type, running)
+                assert torch.isfinite(loss).all()
             else:
                 selected_type = sample_softmax(new_edge_types)
 
@@ -221,6 +228,8 @@ class EdgeAdder(torch.nn.Module):
             running = running * (selected_type != 0)
             if not running.any():
                 break
+
+            assert running.ndimension()==1
 
             # Decide where to add
             # The transform is fs(new_node, all_other_nodes). First layer of this can be decomposed to
@@ -232,6 +241,7 @@ class EdgeAdder(torch.nn.Module):
             if reference is not None:
                 selected_other = reference[add_index][0].long()
                 loss = loss + masked_cross_entropy_loss(logits, graph.owner_masks, selected_other, running)
+                assert torch.isfinite(loss).all(), running
             else:
                 selected_other = mask_softmax_input(logits, graph.owner_masks)
 
@@ -275,15 +285,17 @@ class GraphGen(torch.nn.Module):
 
         i = 0
         while True:
-            print("PINAAAAAAAAAAA", i, graph.nodes.shape)
             graph, l_node = self.node_adder(graph, ref_output[i] if ref_output is not None else None)
             loss = loss + l_node
+            assert torch.isfinite(loss).all()
 
             if not graph.running.any():
                 break
 
             graph, l_edge = self.edge_adder(graph, ref_output[i+1] if ref_output is not None else None)
             loss = loss + l_edge
+
+            assert torch.isfinite(loss).all()
 
             i+=2
 

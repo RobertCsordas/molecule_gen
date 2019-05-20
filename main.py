@@ -18,7 +18,7 @@ class Experiment:
     def __init__(self):
         self.train_set = Chembl("train")
         # self.valid_set = Chembl("valid")
-        self.train_loader = torch.utils.data.DataLoader(self.train_set, batch_size=opt.batch_size, shuffle=True,
+        self.train_loader = torch.utils.data.DataLoader(self.train_set, batch_size=opt.batch_size, shuffle=False,
                                                         collate_fn=Chembl.collate, num_workers=1)
         # self.valid_loader = torch.utils.data.DataLoader(self.valid_set, batch_size=256, shuffle=False,
         #                                                 collate_fn=Chembl.collate, num_workers=1)
