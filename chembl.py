@@ -142,11 +142,15 @@ class Chembl(torch.utils.data.Dataset):
                 if other_atom_local_index is not None:
                     edges.append((other_atom_local_index, self.dataset["bond_type_to_id"][bond.GetBondType()]))
 
+            # Termination node for the edges
+            edges.append((0, self.PAD_CHAR))
             schema.append(type)
             schema.append(edges)
 
             next_atom_index += 1
 
+        # Node termination
+        schema.append(self.PAD_CHAR)
         return schema
 
 

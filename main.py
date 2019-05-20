@@ -8,6 +8,8 @@ from graphgen import GraphGen
 
 parser = argparse.ArgumentParser(description='Process some integers.')
 parser.add_argument("-lr", type=float, default=1e-4)
+parser.add_argument("-wd", type=float, default=0)
+parser.add_argument("-optimizer", default="adam")
 parser.add_argument("-batch_size", type=int, default=8)
 opt = parser.parse_args()
 
@@ -15,15 +17,22 @@ opt = parser.parse_args()
 class Experiment:
     def __init__(self):
         self.train_set = Chembl("train")
-        self.valid_set = Chembl("valid")
+        # self.valid_set = Chembl("valid")
         self.train_loader = torch.utils.data.DataLoader(self.train_set, batch_size=opt.batch_size, shuffle=True,
                                                         collate_fn=Chembl.collate, num_workers=1)
-        self.valid_loader = torch.utils.data.DataLoader(self.valid_set, batch_size=256, shuffle=False,
-                                                        collate_fn=Chembl.collate, num_workers=1)
+        # self.valid_loader = torch.utils.data.DataLoader(self.valid_set, batch_size=256, shuffle=False,
+        #                                                 collate_fn=Chembl.collate, num_workers=1)
 
         self.model = GraphGen(self.train_set.n_node_types(), 128, 128)
 
         self.model = self.model.cuda()
+
+        if opt.optimizer == "adam":
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=opt.lr, weight_decay=opt.wd)
+        elif opt.optimizer == "sgd":
+            self.optimizer = torch.optim.SGD(self.model.parameters(), lr=opt.lr, momentum=0.99, nesterov=True)
+        else:
+            assert False, "Invalid optimizer: %s" % opt.optimizer
 
     @classmethod
     def _all_to_cuda(cls, d):
@@ -42,7 +51,13 @@ class Experiment:
         for d in self.train_loader:
             d = self._all_to_cuda(d)
             # print(d)
-            self.model(*d)
+            g, loss = self.model(d[0])
+            print(loss)
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 0.25)
+            self.optimizer.step()
 
 e = Experiment()
 e.train()
