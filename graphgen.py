@@ -82,9 +82,6 @@ class Propagator(torch.nn.Module):
         if graph.nodes.shape[0]==0 or graph.edge_features.shape[0]==0:
             return graph
 
-        # TODO remove this
-        assert graph.nodes.ndimension()==2
-
         src_transformed  = self.message_srcnode(graph.nodes)
         dest_transformed  = self.message_srcnode(graph.nodes)
 
@@ -250,7 +247,7 @@ class EdgeAdder(torch.nn.Module):
             selected_other = selected_other[running]
             type = selected_type[running]
 
-            feature = self.edge_init.index_select(0, type.long())
+            feature = self.edge_init.index_select(0, (type.long()-1).clamp(min=0))
 
             graph.edge_dest = torch.cat((graph.edge_dest, selected_src, selected_other), 0)
             graph.edge_source = torch.cat((graph.edge_source, selected_other, selected_src), 0)

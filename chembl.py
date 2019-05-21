@@ -245,7 +245,6 @@ class Chembl(torch.utils.data.Dataset):
         # Slow, for debug purposes only
         atom_owner = {}
         curr_id = 0
-        print("=-=-=-=-=-")
 
         for i, c in enumerate(batched):
             if i % 2 == 0:
@@ -255,8 +254,6 @@ class Chembl(torch.utils.data.Dataset):
                         continue
                     atom_owner[curr_id] = bi
                     curr_id += 1
-
-                    print(a)
             else:
                 # edge
                 for e in c:
