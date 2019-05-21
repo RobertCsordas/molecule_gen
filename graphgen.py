@@ -29,14 +29,24 @@ def masked_softmax(tensor, mask):
     tensor = mask_softmax_input(tensor, mask)
     return sample_softmax(tensor)
 
+def loss_running_gate(l, running):
+    return torch.where(running, l, torch.zeros([1], dtype=l.dtype, device=l.device)).mean()
+
 def masked_cross_entropy_loss(tensor, mask, target, enabled):
     tensor = mask_softmax_input(tensor, mask) if mask is not None else tensor
     l = F.cross_entropy(tensor, target.long(), reduction="none")
-    return torch.where(enabled, l, torch.zeros([1], dtype=l.dtype, device=l.device)).mean()
+    return loss_running_gate(l, enabled)
 
-def remap_pad(t, pad_char):
-    return torch.where(t != pad_char, t + 1, torch.zeros(1, dtype=t.dtype, device=t.device))
+def remap_pad(t, pad_char, transform = lambda x: x+1):
+    return torch.where(t != pad_char, transform(t), torch.zeros(1, dtype=t.dtype, device=t.device))
 
+def masked_bce_loss(tensor, target, enabled):
+    l = F.binary_cross_entropy_with_logits(tensor, target.float(), reduction="none")
+    return loss_running_gate(l, enabled)
+
+def sample_binary(tensor):
+    tensor = F.sigmoid(tensor)
+    return torch.empty_like(tensor).uniform_(0,1) < tensor
 
 class Aggregator(torch.nn.Module):
     def __init__(self, state_size, aggregated_size):
@@ -182,6 +192,7 @@ class EdgeAdder(torch.nn.Module):
         super().__init__()
 
         self.pad_char = pad_char
+        self.n_edge_dtypes = n_edge_dtypes
 
         self.propagator = MultilayerPropagator(state_size, propagate_steps)
 
@@ -189,10 +200,10 @@ class EdgeAdder(torch.nn.Module):
         self.edge_init = torch.nn.Parameter(torch.Tensor(n_edge_dtypes, state_size))
         self.edge_init_aggregator = Aggregator(state_size, aggregated_size)
 
-        self.f_addedge = torch.nn.Linear(aggregated_size, n_edge_dtypes + 1)
+        self.f_addedge = torch.nn.Linear(aggregated_size, 1)
 
-        self.fs_layer1_target = torch.nn.Linear(state_size, 1)
-        self.fs_layer1_new = torch.nn.Linear(state_size, 1, bias=False)
+        self.fs_layer1_target = torch.nn.Linear(state_size, n_edge_dtypes)
+        self.fs_layer1_new = torch.nn.Linear(state_size, n_edge_dtypes, bias=False)
 
     def forward(self, graph: Graph, reference):
         # Decide whether to add an edge.
@@ -206,17 +217,16 @@ class EdgeAdder(torch.nn.Module):
         while True:
             graph = self.propagator(graph, running)
 
-            new_edge_types = self.f_addedge(self.edge_decision_aggregator(graph))
+            new_edge_needed = self.f_addedge(self.edge_decision_aggregator(graph)).squeeze(-1)
 
             if reference[add_index] is not None:
-                selected_type = remap_pad(reference[add_index][1], self.pad_char)
-
-                loss = loss + masked_cross_entropy_loss(new_edge_types, None, selected_type, running)
+                need_to_add = reference[add_index][1] != self.pad_char
+                loss = loss + masked_bce_loss(new_edge_needed, need_to_add, running)
             else:
-                selected_type = sample_softmax(new_edge_types)
+                need_to_add = sample_binary(new_edge_needed)
 
             # Stop if there are no more edges added
-            running = running * (selected_type != 0)
+            running = running & need_to_add
             if not running.any():
                 break
 
@@ -225,13 +235,24 @@ class EdgeAdder(torch.nn.Module):
             # fs_layer1_target(all_other_nodes) + fs_layer1_new(new_node).
 
             new_nodes = graph.nodes.index_select(0, graph.last_inserted_node)
-            logits = self.fs_layer1_target(graph.nodes).unsqueeze(0).squeeze(-1) + self.fs_layer1_new(new_nodes)
+            logits = self.fs_layer1_target(graph.nodes).unsqueeze(0) + self.fs_layer1_new(new_nodes).unsqueeze(1)
+            logits = logits.view(logits.shape[0], -1)
+
+            # Logits is a [batch_size, n_nodes * n_edge_types] tensor. A softmax over all of this is done, and
+            # then sampled.
 
             if reference is not None:
-                selected_other = reference[add_index][0].long()
-                loss = loss + masked_cross_entropy_loss(logits, graph.owner_masks, selected_other, running)
+                selected_edge = reference[add_index][0].long() * self.n_edge_dtypes + \
+                                 remap_pad(reference[add_index][1].long(), self.pad_char, lambda x: x)
+
+                loss = loss + masked_cross_entropy_loss(logits, graph.owner_masks.unsqueeze(-1).
+                                    expand(-1,-1, self.n_edge_dtypes).contiguous().view(graph.batch_size,-1),
+                                                        selected_edge, running)
             else:
-                selected_other = mask_softmax_input(logits, graph.owner_masks)
+                selected_edge = mask_softmax_input(logits, graph.owner_masks)
+
+            selected_type = selected_edge % self.n_edge_dtypes
+            selected_other = selected_edge / self.n_edge_dtypes
 
             # Add the new edges. In this case they are undirected, so add them in both directions.
             selected_src = graph.last_inserted_node[running]
