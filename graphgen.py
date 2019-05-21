@@ -217,7 +217,6 @@ class EdgeAdder(torch.nn.Module):
                 selected_type = remap_pad(reference[add_index][1], self.pad_char)
 
                 loss = loss + masked_cross_entropy_loss(new_edge_types, None, selected_type, running)
-                assert torch.isfinite(loss).all()
             else:
                 selected_type = sample_softmax(new_edge_types)
 
@@ -238,7 +237,6 @@ class EdgeAdder(torch.nn.Module):
             if reference is not None:
                 selected_other = reference[add_index][0].long()
                 loss = loss + masked_cross_entropy_loss(logits, graph.owner_masks, selected_other, running)
-                assert torch.isfinite(loss).all(), running
             else:
                 selected_other = mask_softmax_input(logits, graph.owner_masks)
 
@@ -284,15 +282,12 @@ class GraphGen(torch.nn.Module):
         while True:
             graph, l_node = self.node_adder(graph, ref_output[i] if ref_output is not None else None)
             loss = loss + l_node
-            assert torch.isfinite(loss).all()
 
             if not graph.running.any():
                 break
 
             graph, l_edge = self.edge_adder(graph, ref_output[i+1] if ref_output is not None else None)
             loss = loss + l_edge
-
-            assert torch.isfinite(loss).all()
 
             i+=2
 

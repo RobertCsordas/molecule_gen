@@ -23,7 +23,7 @@ class Chembl(torch.utils.data.Dataset):
         l = len(array)
         set_i = self.SPLIT_NAMES.index(split)
         start = 0 if set_i==0 else int(math.ceil(l*self.SPLITS[set_i-1]))
-        end = int(l*self.SPLITS[set_i])
+        end = start + int(l*self.SPLITS[set_i])
         return array[start:end]
 
     def __init__(self, split="train", max_atoms=20, random_order=False):
@@ -269,7 +269,7 @@ class Chembl(torch.utils.data.Dataset):
 if __name__=="__main__":
     dataset = Chembl()
 
-    Chembl.verify_links(dataset.batchify([dataset[i] for i in range(3)])[0])
+    Chembl.verify_links(dataset.batchify([dataset[i] for i in range(64)])[0])
 
     print(dataset[1])
     print("-------------------------------------------------------------------------")

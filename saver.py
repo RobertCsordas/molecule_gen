@@ -1,6 +1,7 @@
 import os
 import torch
 
+
 class Saver:
     def __init__(self, module, save_dir):
         self.module = module
@@ -12,6 +13,9 @@ class Saver:
 
     @staticmethod
     def get_checkpoint_index_list(dir):
+         if not os.path.isdir(dir):
+             return []
+
          return list(reversed(sorted(
             [int(fn.split(".")[0].split("-")[-1]) for fn in os.listdir(dir) if fn.split(".")[-1] == "pth"])))
 
