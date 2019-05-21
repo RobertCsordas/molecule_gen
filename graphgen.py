@@ -83,7 +83,7 @@ class Propagator(torch.nn.Module):
             return graph
 
         src_transformed  = self.message_srcnode(graph.nodes)
-        dest_transformed  = self.message_srcnode(graph.nodes)
+        dest_transformed  = self.message_destnode(graph.nodes)
 
         edge_src = src_transformed.index_select(dim=0, index=graph.edge_source)
         edge_dest = dest_transformed.index_select(dim=0, index=graph.edge_dest)
@@ -103,7 +103,6 @@ class Propagator(torch.nn.Module):
         new_nodes = self.node_update_fn(inputs, graph.nodes)
 
         graph.nodes = torch.where(self._node_update_mask(graph, mask_override).unsqueeze(-1), new_nodes, graph.nodes)
-        assert graph.nodes.ndimension() == 2
         return graph
 
 
@@ -190,10 +189,7 @@ class EdgeAdder(torch.nn.Module):
         self.edge_init = torch.nn.Parameter(torch.Tensor(n_edge_dtypes, state_size))
         self.edge_init_aggregator = Aggregator(state_size, aggregated_size)
 
-        self.f_addedge = torch.nn.Sequential(
-            torch.nn.Linear(aggregated_size, n_edge_dtypes + 1),
-            torch.nn.Softmax(-1)
-        )
+        self.f_addedge = torch.nn.Linear(aggregated_size, n_edge_dtypes + 1)
 
         self.fs_layer1_target = torch.nn.Linear(state_size, 1)
         self.fs_layer1_new = torch.nn.Linear(state_size, 1, bias=False)
