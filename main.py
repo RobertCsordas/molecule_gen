@@ -14,7 +14,7 @@ parser.add_argument("-lr", type=float, default=1e-4)
 parser.add_argument("-wd", type=float, default=0)
 parser.add_argument("-save_interval", type=int, default=5000)
 parser.add_argument("-optimizer", default="adam")
-parser.add_argument("-batch_size", type=int, default=8)
+parser.add_argument("-batch_size", type=int, default=64)
 parser.add_argument("-save_dir", type=str)
 parser.add_argument("-gpu", type=str, default="")
 opt = parser.parse_args()
@@ -87,15 +87,16 @@ class Experiment:
         self.model.eval()
 
         loss_sum = 0
+        cnt = 0
         with torch.no_grad():
             for d in tqdm(self.valid_loader):
                 d = self._move_to_device(d)
-                # print(d)
                 _, loss = self.model(d[0])
 
+                cnt += d[0][0].shape[0]
                 loss_sum += loss.item() * d[0][0].shape[0]
 
-        loss = loss_sum / len(self.valid_loader)
+        loss = loss_sum / cnt
         self.valid_loss_plot.add_point(self.iteration, loss)
 
     def train(self):
@@ -118,10 +119,11 @@ class Experiment:
                 self.optimizer.step()
 
                 self.iteration += 1
-                if self.iteration % self.opt.save_interval==0:
-                    self.saver.save(self.iteration)
+                # if self.iteration % self.opt.save_interval==0:
+                #     self.saver.save(self.iteration)
 
             self.test()
+            self.saver.save(self.iteration)
             self.epoch += 1
 
 e = Experiment(opt)
