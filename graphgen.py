@@ -182,7 +182,7 @@ class NodeAdder(torch.nn.Module):
 
             graph.owner_masks = torch.cat((graph.owner_masks, owner_masks), dim=1)
 
-            graph.node_types = torch.cat((graph.node_types, selected_type[mask]), dim=0)
+            graph.node_types = torch.cat((graph.node_types, selected_type[mask].byte()), dim=0)
 
         return graph, loss
 
@@ -200,7 +200,8 @@ class EdgeAdder(torch.nn.Module):
         self.edge_init = torch.nn.Parameter(torch.Tensor(n_edge_dtypes, state_size))
         self.edge_init_aggregator = Aggregator(state_size, aggregated_size)
 
-        self.f_addedge = torch.nn.Linear(aggregated_size, 1)
+        self.f_addedge_aggregated = torch.nn.Linear(aggregated_size, 1)
+        self.f_addedge_new = torch.nn.Linear(state_size, 1, bias=False)
 
         self.fs_layer1_target = torch.nn.Linear(state_size, n_edge_dtypes)
         self.fs_layer1_new = torch.nn.Linear(state_size, n_edge_dtypes, bias=False)
@@ -214,10 +215,13 @@ class EdgeAdder(torch.nn.Module):
             return graph, loss
 
         add_index = 0
+
+        new_nodes = graph.nodes.index_select(0, graph.last_inserted_node)
         while True:
             graph = self.propagator(graph, running)
 
-            new_edge_needed = self.f_addedge(self.edge_decision_aggregator(graph)).squeeze(-1)
+            new_edge_needed = (self.f_addedge_aggregated(self.edge_decision_aggregator(graph)) +
+                               self.f_addedge_new(new_nodes)).squeeze(-1)
 
             if reference[add_index] is not None:
                 need_to_add = reference[add_index][1] != self.pad_char
@@ -234,7 +238,6 @@ class EdgeAdder(torch.nn.Module):
             # The transform is fs(new_node, all_other_nodes). First layer of this can be decomposed to
             # fs_layer1_target(all_other_nodes) + fs_layer1_new(new_node).
 
-            new_nodes = graph.nodes.index_select(0, graph.last_inserted_node)
             logits = self.fs_layer1_target(graph.nodes).unsqueeze(0) + self.fs_layer1_new(new_nodes).unsqueeze(1)
             logits = logits.view(logits.shape[0], -1)
 
