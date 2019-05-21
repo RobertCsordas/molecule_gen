@@ -226,7 +226,7 @@ class Chembl(torch.utils.data.Dataset):
             if si % 2 == 0:
                 res.append(torch.tensor(s, dtype=torch.uint8))
             else:
-                res.append([(torch.tensor(a[0], dtype=torch.uint8), torch.tensor(a[1], dtype=torch.uint8)) for a in s])
+                res.append([(torch.tensor(a[0], dtype=torch.int16), torch.tensor(a[1], dtype=torch.uint8)) for a in s])
 
         return res, torch.tensor(owner_mask, dtype=torch.uint8)
 

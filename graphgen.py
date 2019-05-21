@@ -208,7 +208,6 @@ class EdgeAdder(torch.nn.Module):
 
         add_index = 0
         while True:
-            assert running.ndimension() == 1
             graph = self.propagator(graph, running)
 
             new_edge_types = self.f_addedge(self.edge_decision_aggregator(graph))
@@ -224,8 +223,6 @@ class EdgeAdder(torch.nn.Module):
             running = running * (selected_type != 0)
             if not running.any():
                 break
-
-            assert running.ndimension()==1
 
             # Decide where to add
             # The transform is fs(new_node, all_other_nodes). First layer of this can be decomposed to
