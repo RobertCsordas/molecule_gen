@@ -19,14 +19,22 @@ class Saver:
          return list(reversed(sorted(
             [int(fn.split(".")[0].split("-")[-1]) for fn in os.listdir(dir) if fn.split(".")[-1] == "pth"])))
 
+    def _name_from_iter(self, iter):
+        return os.path.join(self.save_dir, "model-%d.pth" % iter)
+
     def newest_checkpoint(self):
         f = self.get_checkpoint_index_list(self.save_dir)
-        return os.path.join(self.save_dir, "model-%d.pth" % f[0]) if f else None
+        return self._name_from_iter(f[0]) if f else None
 
-    def load(self):
-        fname = self.newest_checkpoint()
-        if not fname:
-            return
+    def load(self, fname=None):
+        if fname is None:
+            fname = self.newest_checkpoint()
+            if not fname:
+                return
+        elif isinstance(fname, int):
+            fname = self._name_from_iter(fname)
+        elif not isinstance(fname, str):
+            assert False, "Invalid fname"
 
         print("Loading %s" % fname)
         self.module.load_state_dict(torch.load(fname))

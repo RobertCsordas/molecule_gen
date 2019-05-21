@@ -32,9 +32,12 @@ class Experiment:
 
         self.train_set = Chembl("train")
         self.valid_set = Chembl("valid")
+        self.test_set = Chembl("test")
         self.train_loader = torch.utils.data.DataLoader(self.train_set, batch_size=opt.batch_size, shuffle=True,
                                                         collate_fn=Chembl.collate, num_workers=1)
         self.valid_loader = torch.utils.data.DataLoader(self.valid_set, batch_size=256, shuffle=False,
+                                                        collate_fn=Chembl.collate, num_workers=1)
+        self.test_loader = torch.utils.data.DataLoader(self.test_set, batch_size=256, shuffle=False,
                                                         collate_fn=Chembl.collate, num_workers=1)
 
         self.model = GraphGen(self.train_set.n_node_types(), self.train_set.n_edge_types(), 128)
@@ -52,6 +55,12 @@ class Experiment:
 
         self.iteration = 0
         self.epoch = 0
+
+        self.best_loss = float("inf")
+        self.best_loss_iteration = 0
+        self.best_loss_epoch = 0
+        self.patience = 2
+
         self.saver = Saver(self, opt.save_dir)
         self.saver.load()
 
@@ -73,7 +82,10 @@ class Experiment:
             "optimizer": self.optimizer.state_dict(),
             "loss_plot": self.loss_plot.state_dict(),
             "iteration": self.iteration,
-            "epoch": self.epoch
+            "epoch": self.epoch,
+            "best_loss": self.best_loss,
+            "best_loss_iteration": self.best_loss_iteration,
+            "best_loss_epoch": self.best_loss_epoch
         }
 
     def load_state_dict(self, state_dict):
@@ -81,15 +93,18 @@ class Experiment:
         self.optimizer.load_state_dict(state_dict["optimizer"])
         self.loss_plot.load_state_dict(state_dict["loss_plot"])
         self.iteration = state_dict["iteration"]
-        self.epuch = state_dict["epoch"]
+        self.epoch = state_dict["epoch"]
+        self.best_loss = state_dict["best_loss"]
+        self.best_loss_iteration = state_dict["best_loss_iteration"]
+        self.best_loss_epoch = state_dict["best_loss_epoch"]
 
-    def test(self):
+    def test(self, loader=None):
         self.model.eval()
 
         loss_sum = 0
         cnt = 0
         with torch.no_grad():
-            for d in tqdm(self.valid_loader):
+            for d in tqdm(loader):
                 d = self._move_to_device(d)
                 _, loss = self.model(d[0])
 
@@ -97,14 +112,27 @@ class Experiment:
                 loss_sum += loss.item() * d[0][0].shape[0]
 
         loss = loss_sum / cnt
-        self.valid_loss_plot.add_point(self.iteration, loss)
+        return loss
+
+    def load_the_best(self):
+        self.saver.load(self.best_loss_iteration)
+
+    def do_final_test(self):
+        self.load_the_best()
+        test_loss = self.test(self.test_loader)
+        print("----------------------------------------------")
+        print("Training done.")
+        print("    Validation loss:", self.best_loss)
+        print("    Test loss:", test_loss)
+        print("    Epoch:", self.best_loss_epoch)
+        print("    Iteration:", self.best_loss_iteration)
 
     def train(self):
-        self.model.train()
-
-        while True:
+        running = True
+        while running:
             print("Epoch %d" % self.epoch)
 
+            self.model.train()
             for d in tqdm(self.train_loader):
                 d = self._move_to_device(d)
                 # print(d)
@@ -119,13 +147,23 @@ class Experiment:
                 self.optimizer.step()
 
                 self.iteration += 1
-                # if self.iteration % self.opt.save_interval==0:
-                #     self.saver.save(self.iteration)
 
-            self.test()
+            # Do a validation step
+            validation_loss = self.test(self.valid_loader)
+            self.valid_loss_plot.add_point(self.iteration, validation_loss)
+
+            # Early stopping
+            if validation_loss <= self.best_loss:
+                self.best_loss = validation_loss
+                self.best_loss_iteration = self.iteration
+                self.best_loss_epoch = self.epoch
+            elif (self.epoch - self.best_loss_epoch) > self.patience:
+                running = False
+
+            # Save the model
             self.saver.save(self.iteration)
             self.epoch += 1
 
 e = Experiment(opt)
 e.train()
-# e.test()
+e.do_final_test()
