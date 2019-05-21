@@ -7,9 +7,9 @@ class Saver:
         self.module = module
         self.save_dir = save_dir
 
-    def save(self, iteration):
+    def save(self, suffix):
         os.makedirs(self.save_dir, exist_ok=True)
-        torch.save(self.module.state_dict(), os.path.join(self.save_dir, "model-%d.pth" % iteration))
+        torch.save(self.module.state_dict(), os.path.join(self.save_dir, "model-%s.pth" % suffix))
 
     @staticmethod
     def get_checkpoint_index_list(dir):

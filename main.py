@@ -12,7 +12,6 @@ import os
 parser = argparse.ArgumentParser(description='Process some integers.')
 parser.add_argument("-lr", type=float, default=1e-4)
 parser.add_argument("-wd", type=float, default=0)
-parser.add_argument("-save_interval", type=int, default=5000)
 parser.add_argument("-optimizer", default="adam")
 parser.add_argument("-batch_size", type=int, default=64)
 parser.add_argument("-save_dir", type=str)
@@ -59,6 +58,7 @@ class Experiment:
         self.best_loss = float("inf")
         self.best_loss_iteration = 0
         self.best_loss_epoch = 0
+        self.test_loss = None
         self.patience = 2
 
         self.saver = Saver(self, opt.save_dir)
@@ -85,7 +85,8 @@ class Experiment:
             "epoch": self.epoch,
             "best_loss": self.best_loss,
             "best_loss_iteration": self.best_loss_iteration,
-            "best_loss_epoch": self.best_loss_epoch
+            "best_loss_epoch": self.best_loss_epoch,
+            "test_loss": self.test_loss
         }
 
     def load_state_dict(self, state_dict):
@@ -97,6 +98,7 @@ class Experiment:
         self.best_loss = state_dict["best_loss"]
         self.best_loss_iteration = state_dict["best_loss_iteration"]
         self.best_loss_epoch = state_dict["best_loss_epoch"]
+        self.test_loss = state_dict["test_loss"]
 
     def test(self, loader=None):
         self.model.eval()
@@ -119,13 +121,14 @@ class Experiment:
 
     def do_final_test(self):
         self.load_the_best()
-        test_loss = self.test(self.test_loader)
+        self.test_loss = self.test(self.test_loader)
         print("----------------------------------------------")
         print("Training done.")
         print("    Validation loss:", self.best_loss)
-        print("    Test loss:", test_loss)
+        print("    Test loss:", self.test_loss)
         print("    Epoch:", self.best_loss_epoch)
         print("    Iteration:", self.best_loss_iteration)
+        self.saver.save("best")
 
     def train(self):
         running = True
