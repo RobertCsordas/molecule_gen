@@ -17,6 +17,14 @@ class Graph:
 
         self.running = torch.ones(batch_size, device=device, dtype=torch.uint8)
 
+    def get_final_graph(self, device=torch.device("cpu")):
+        needed = ["node_types", "edge_source", "edge_dest", "edge_types", "owner_masks"]
+        res = Graph(self.batch_size, 1, device)
+        for k, v in self.__dict__.items():
+            if torch.is_tensor(v):
+                res.__dict__[k] = v.to(device) if k in needed else None
+        return res
+
 
 def sample_softmax(tensor, dim=-1):
     eps=1e-20
@@ -188,17 +196,18 @@ class NodeAdder(torch.nn.Module):
 
             graph.nodes = torch.cat((graph.nodes, new_nodes), dim=0)
             graph.owner_masks = torch.cat((graph.owner_masks, owner_masks), dim=1)
-            graph.node_types = torch.cat((graph.node_types, selected_type[mask].byte()), dim=0)
+            graph.node_types = torch.cat((graph.node_types, selected_type[mask].byte()-1), dim=0)
 
         return graph, loss
 
 
 class EdgeAdder(torch.nn.Module):
-    def __init__(self, state_size, aggregated_size, n_edge_dtypes, pad_char, propagate_steps):
+    def __init__(self, state_size, aggregated_size, n_edge_dtypes, pad_char, propagate_steps, n_max_edges):
         super().__init__()
 
         self.pad_char = pad_char
         self.n_edge_dtypes = n_edge_dtypes
+        self.n_max_edges = n_max_edges
 
         self.propagator = MultilayerPropagator(state_size, propagate_steps)
 
@@ -230,10 +239,15 @@ class EdgeAdder(torch.nn.Module):
                                self.f_addedge_new(new_nodes)).squeeze(-1)
 
             if reference is not None:
+                assert self.n_max_edges is None or add_index < self.n_max_edges
                 need_to_add = reference[add_index][1] != self.pad_char
                 loss = loss + masked_bce_loss(new_edge_needed, need_to_add, running)
             else:
                 need_to_add = sample_binary(new_edge_needed)
+
+                # Force termination when the limit is reached.
+                if self.n_max_edges is not None and add_index >= self.n_max_edges:
+                    need_to_add = torch.zeros_like(need_to_add)
 
             # Stop if there are no more edges added
             running = running & need_to_add
@@ -283,13 +297,16 @@ class EdgeAdder(torch.nn.Module):
 
 
 class GraphGen(torch.nn.Module):
-    def __init__(self, n_node_types, n_edge_types, state_size, pad_char=255, propagate_steps=2):
+    def __init__(self, n_node_types, n_edge_types, state_size, pad_char=255, propagate_steps=2,
+                 n_max_nodes=None, n_max_edges=None):
         super().__init__()
 
         self.aggregated_size = state_size * 2
         self.state_size = state_size
 
-        self.edge_adder = EdgeAdder(state_size, self.aggregated_size, n_edge_types, pad_char, propagate_steps)
+        self.n_max_nodes = n_max_nodes
+
+        self.edge_adder = EdgeAdder(state_size, self.aggregated_size, n_edge_types, pad_char, propagate_steps, n_max_edges)
         self.node_adder = NodeAdder(state_size, self.aggregated_size, propagate_steps, n_node_types, pad_char)
 
     def forward(self, ref_output, batch_size=None, device=None):
@@ -306,6 +323,9 @@ class GraphGen(torch.nn.Module):
 
         i = 0
         while True:
+            if self.n_max_nodes is not None and self.n_max_nodes <= i//2:
+                break
+
             graph, l_node = self.node_adder(graph, ref_output[i] if ref_output is not None else None)
             loss = loss + l_node
 

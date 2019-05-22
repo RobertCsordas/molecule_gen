@@ -2,11 +2,17 @@ import urllib.request
 import os
 import gzip
 from rdkit import Chem
+from rdkit import RDLogger
 import torch
 from tqdm import tqdm
 import numpy as np
 import math
 import torch.utils.data
+import torch.multiprocessing as mp
+
+lg = RDLogger.logger()
+lg.setLevel(RDLogger.CRITICAL)
+
 
 class Chembl(torch.utils.data.Dataset):
     URL = "ftp://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_25_chemreps.txt.gz"
@@ -49,7 +55,8 @@ class Chembl(torch.utils.data.Dataset):
 
                 Chembl.dataset = {
                     "smiles": [],
-                    "heavy_atom_count": []
+                    "heavy_atom_count": [],
+                    "bond_count": []
                 }
 
                 for line in tqdm(lines):
@@ -70,6 +77,7 @@ class Chembl(torch.utils.data.Dataset):
                         canonical_smiles = Chem.MolToSmiles(m)
                         self.dataset["smiles"].append(canonical_smiles)
                         self.dataset["heavy_atom_count"].append(m.GetNumHeavyAtoms())
+                        self.dataset["bond_count"].append(m.GetNumBonds())
 
                 # Do a random permutation that is constant amoung runs
                 indices = np.random.RandomState(0xB0C1FA52).choice(len(self.dataset["smiles"]),
@@ -77,8 +85,9 @@ class Chembl(torch.utils.data.Dataset):
                 Chembl.dataset = {
                     "smiles": [self.dataset["smiles"][i] for i in indices],
                     "heavy_atom_count": [self.dataset["heavy_atom_count"][i] for i in indices],
+                    "bond_count": [self.dataset["bond_count"][i] for i in indices],
                     "bond_types": list(sorted(bond_types)),
-                    "atom_types": list(sorted(atom_types))
+                    "atom_types": list(sorted(atom_types)),
                 }
 
                 print("Done. Read %d" % len(self.dataset["smiles"]))
@@ -95,6 +104,9 @@ class Chembl(torch.utils.data.Dataset):
 
         used_smiles = [s for i, s in enumerate(self.dataset["smiles"]) if self.dataset["heavy_atom_count"][i] <= max_atoms]
         self.used_set = used_smiles
+
+        self.max_bonds = max(b for i, b in enumerate(self.dataset["bond_count"])
+                             if self.dataset["heavy_atom_count"][i] <= max_atoms)
 
         print("%d atoms match the count limit" % len(self.used_set))
         self.used_set = self._get_split(self.used_set, split)
@@ -304,15 +316,11 @@ class Chembl(torch.utils.data.Dataset):
 
         return molecules
 
-
-    def start_verification(self):
-        return dict(n_ok=0, n_total=0, n_new=0)
-
-    def verify(self, v, graph):
+    def _verify(self, v, graph):
         molecules = self.graph_to_molecules(graph)
 
         for m in molecules:
-            v["n_total"]+=1
+            v["n_total"] += 1
 
             if m is None:
                 continue
@@ -320,13 +328,60 @@ class Chembl(torch.utils.data.Dataset):
             try:
                 s = Chem.SanitizeMol(m)
                 canonical_smiles = Chem.MolToSmiles(m)
-                v["n_ok"]+=1
+                v["n_ok"] += 1
             except:
                 continue
 
             v["n_new"] += int(canonical_smiles not in self.used_set)
 
-        print(v)
+    def _get_verification_results(self, v):
+        return v["n_ok"] / v["n_total"], (v["n_new"] / v["n_ok"] if v["n_ok"] > 0 else 0)
+
+    def start_verification(self):
+        # Verification is a slow process. So start background processes to do it.
+        n_process = 1
+        def worker(queue):
+            data = dict(n_ok=0, n_total=0, n_new=0)
+            while True:
+                graph = queue.get()
+                if graph is None:
+                    queue.put(data)
+                    break
+
+                self._verify(data, graph)
+
+        queues = [mp.Queue(1) for _ in range(n_process)]
+        processes = []
+        for i in range(n_process):
+            p = mp.Process(target=worker, args=(queues[i],))
+            p.start()
+            processes.append(p)
+
+        return dict(processes=processes, queues=queues, current=0)
+
+    def verify(self, v, graph):
+        v["queues"][v["current"]].put(graph)
+        v["current"] = (v["current"] + 1) % len(v["queues"])
+
+    def get_verification_results(self, v):
+        for q in v["queues"]:
+            q.put(None)
+
+        for p in v["processes"]:
+            p.join()
+
+        data = {}
+        for q in v["queues"]:
+            res = q.get()
+            for k, cnt in res.items():
+                data[k] = data.get(k, 0) + cnt
+
+        v["processes"] = None
+        v["queues"] = None
+        return self._get_verification_results(data)
+
+    def get_max_bonds(self):
+        return self.max_bonds
 
 
 if __name__=="__main__":

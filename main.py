@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 import torch
+import gc
 from chembl import Chembl
-import argparse
 from graphgen import GraphGen
 from tqdm import tqdm
 from saver import Saver
@@ -40,7 +40,8 @@ class Experiment:
         self.test_loader = torch.utils.data.DataLoader(self.test_set, batch_size=256, shuffle=False,
                                                         collate_fn=Chembl.collate, num_workers=1)
 
-        self.model = GraphGen(self.train_set.n_node_types(), self.train_set.n_edge_types(), 128)
+        self.model = GraphGen(self.train_set.n_node_types(), self.train_set.n_edge_types(), 128,
+                              n_max_nodes=30, n_max_edges=2*self.train_set.get_max_bonds())
         self.model = self.model.to(self.device)
 
         if opt.optimizer == "adam":
@@ -143,6 +144,8 @@ class Experiment:
                 g, loss = self.model(d[0])
                 assert torch.isfinite(loss), "Loss is %s" % loss.item()
 
+                # self.train_set.graph_to_molecules(g)
+
                 self.loss_plot.add_point(self.iteration, loss.item())
 
                 self.optimizer.zero_grad()
@@ -171,15 +174,22 @@ class Experiment:
     def train_done(self):
         return self.test_loss is not None
 
-    def generate(self):
+    def generate(self, n_test=100000):
         v = self.train_set.start_verification()
 
+        bsize = 200
         self.model.eval()
-        res = self.model.generate(256, self.device)
+        with torch.no_grad():
+            for i in tqdm(range(n_test//bsize)):
+                res = self.model.generate(bsize, self.device)
+                self.train_set.verify(v, res.get_final_graph())
+                gc.collect()
 
-        self.train_set.verify(v, res)
-        print(res)
+        return self.train_set.get_verification_results(v)
 
 e = Experiment(opt)
-e.train()
-e.do_final_test()
+if not e.train_done():
+    e.train()
+    e.do_final_test()
+# e.train()
+print(e.generate())
