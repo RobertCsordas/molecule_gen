@@ -69,6 +69,8 @@ class Chembl(torch.utils.data.Dataset):
                             print("WARNING: Invalid SMILES string:", smiles)
                             continue
 
+                        Chem.SanitizeMol(m)
+
                         for a in m.GetAtoms():
                             atom_types.add(a.GetSymbol())
                             for b in a.GetBonds():
@@ -328,57 +330,52 @@ class Chembl(torch.utils.data.Dataset):
             try:
                 s = Chem.SanitizeMol(m)
                 canonical_smiles = Chem.MolToSmiles(m)
-                v["n_ok"] += 1
             except:
                 continue
 
+            v["n_ok"] += 1
             v["n_new"] += int(canonical_smiles not in self.used_set)
+            if canonical_smiles not in v["known"]:
+                v["unique"] += 1
+                v["known"].add(canonical_smiles)
 
     def _get_verification_results(self, v):
-        return v["n_ok"] / v["n_total"], (v["n_new"] / v["n_ok"] if v["n_ok"] > 0 else 0)
+        return {
+           "ratio_ok": v["n_ok"] / v["n_total"],
+           "ratio_not_in_training": (v["n_new"] / v["n_ok"] if v["n_ok"] > 0 else 0),
+           "ratio_unique": (v["unique"] / v["n_ok"] if v["n_ok"] > 0 else 0)
+        }
 
     def start_verification(self):
-        # Verification is a slow process. So start background processes to do it.
-        n_process = 1
+        # Verification is a slow process. So start background process to do it.
         def worker(queue):
-            data = dict(n_ok=0, n_total=0, n_new=0)
+            data = dict(n_ok=0, n_total=0, n_new=0, unique=0, known=set())
             while True:
                 graph = queue.get()
                 if graph is None:
-                    queue.put(data)
+                    queue.put(self._get_verification_results(data))
                     break
 
                 self._verify(data, graph)
 
-        queues = [mp.Queue(1) for _ in range(n_process)]
-        processes = []
-        for i in range(n_process):
-            p = mp.Process(target=worker, args=(queues[i],))
-            p.start()
-            processes.append(p)
+        queue = mp.Queue(1)
+        p = mp.Process(target=worker, args=(queue,))
+        p.start()
 
-        return dict(processes=processes, queues=queues, current=0)
+        return dict(process=p, queue=queue)
 
     def verify(self, v, graph):
-        v["queues"][v["current"]].put(graph)
-        v["current"] = (v["current"] + 1) % len(v["queues"])
+        v["queue"].put(graph)
 
     def get_verification_results(self, v):
-        for q in v["queues"]:
-            q.put(None)
+        v["queue"].put(None)
+        v["process"].join()
 
-        for p in v["processes"]:
-            p.join()
+        res = v["queue"].get()
 
-        data = {}
-        for q in v["queues"]:
-            res = q.get()
-            for k, cnt in res.items():
-                data[k] = data.get(k, 0) + cnt
-
-        v["processes"] = None
-        v["queues"] = None
-        return self._get_verification_results(data)
+        v["process"] = None
+        v["queue"] = None
+        return res
 
     def get_max_bonds(self):
         return self.max_bonds

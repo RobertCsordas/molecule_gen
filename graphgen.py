@@ -58,7 +58,7 @@ def masked_bce_loss(tensor, target, enabled):
     return loss_running_gate(l, enabled)
 
 def sample_binary(tensor):
-    tensor = F.sigmoid(tensor)
+    tensor = torch.sigmoid(tensor)
     return torch.empty_like(tensor).uniform_(0,1) < tensor
 
 class Aggregator(torch.nn.Module):
