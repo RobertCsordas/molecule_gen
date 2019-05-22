@@ -265,6 +265,71 @@ class Chembl(torch.utils.data.Dataset):
                             assert l in atom_owner, "Link to invalid atom: %l" % l
                             assert atom_owner[l] == bi, "Atom %d owner: %d != link %d" % (l, atom_owner[l], bi)
 
+    def graph_to_molecules(self, graph):
+        molecules = [Chem.RWMol() for i in range(graph.batch_size)]
+        atom_counts = [0 for i in range(graph.batch_size)]
+
+        atoms = graph.node_types.cpu().numpy().tolist()
+        owners = graph.owner_masks.max(0)[1].cpu().numpy().tolist()
+
+        atom_maps = {}
+
+        for i, a in enumerate(atoms):
+            molecules[owners[i]].AddAtom(Chem.Atom(self.dataset["id_to_atom_type"][a]))
+            atom_maps[i] = (owners[i], atom_counts[owners[i]])
+            atom_counts[owners[i]] += 1
+
+        edge_src = graph.edge_source.cpu().numpy().tolist()
+        edge_dest = graph.edge_dest.cpu().numpy().tolist()
+        edge_type = graph.edge_types.cpu().numpy().tolist()
+
+        # Edges are directed. So each edge is present 2 times in edge_*. Filter them out
+        added_edges = set()
+        for i, etype in enumerate(edge_type):
+            batch, si = atom_maps[edge_src[i]]
+            batch2, di = atom_maps[edge_dest[i]]
+
+            assert batch==batch2, "Cross batch edge?! %d, %d" % (batch, batch2)
+
+            if molecules[batch] is None:
+                continue
+
+            if (si, di) in added_edges or (di, si) in added_edges:
+                continue
+
+            if si==di:
+                molecules[batch] = None
+                continue
+
+            added_edges.add((si,di))
+            molecules[batch].AddBond(si, di, self.dataset["id_to_bond_type"][etype])
+
+        return molecules
+
+
+    def start_verification(self):
+        return dict(n_ok=0, n_total=0, n_new=0)
+
+    def verify(self, v, graph):
+        molecules = self.graph_to_molecules(graph)
+
+        for m in molecules:
+            v["n_total"]+=1
+
+            if m is None:
+                continue
+
+            try:
+                s = Chem.SanitizeMol(m)
+                canonical_smiles = Chem.MolToSmiles(m)
+                v["n_ok"]+=1
+            except:
+                continue
+
+            v["n_new"] += int(canonical_smiles not in self.used_set)
+
+        print(v)
+
 
 if __name__=="__main__":
     dataset = Chembl()

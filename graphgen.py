@@ -11,6 +11,7 @@ class Graph:
         self.edge_source = torch.zeros(0, dtype=torch.long, device=device)
         self.edge_dest = torch.zeros(0, dtype=torch.long, device=device)
         self.edge_features = torch.zeros(0, state_size, dtype=torch.float, device=device)
+        self.edge_types = torch.zeros(0, dtype=torch.uint8, device=device)
         self.owner_masks = torch.zeros(batch_size, 0, dtype=torch.uint8, device=device)
         self.last_inserted_node = torch.zeros(batch_size, dtype=torch.long, device=device)
 
@@ -179,9 +180,7 @@ class NodeAdder(torch.nn.Module):
             owner_masks = F.one_hot(mask.nonzero().squeeze(-1), graph.batch_size).transpose(0,1).byte()
 
             graph.nodes = torch.cat((graph.nodes, new_nodes), dim=0)
-
             graph.owner_masks = torch.cat((graph.owner_masks, owner_masks), dim=1)
-
             graph.node_types = torch.cat((graph.node_types, selected_type[mask].byte()), dim=0)
 
         return graph, loss
@@ -268,6 +267,9 @@ class EdgeAdder(torch.nn.Module):
             graph.edge_dest = torch.cat((graph.edge_dest, selected_src, selected_other), 0)
             graph.edge_source = torch.cat((graph.edge_source, selected_other, selected_src), 0)
             graph.edge_features = torch.cat((graph.edge_features, feature, feature), 0)
+
+            type = type.byte()
+            graph.edge_types = torch.cat((graph.edge_types, type, type), 0)
 
             add_index += 1
 

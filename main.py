@@ -172,8 +172,12 @@ class Experiment:
         return self.test_loss is not None
 
     def generate(self):
+        v = self.train_set.start_verification()
+
         self.model.eval()
         res = self.model.generate(256, self.device)
+
+        self.train_set.verify(v, res)
         print(res)
 
 e = Experiment(opt)
