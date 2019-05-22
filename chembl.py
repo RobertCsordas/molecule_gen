@@ -187,9 +187,7 @@ class Chembl(torch.utils.data.Dataset):
                     if i >= len(s) or s[i]==cls.PAD_CHAR:
                         all_nodes.append(cls.PAD_CHAR)
                     else:
-                        fasz = (si, i // 2)
-                        assert fasz not in node_id_to_new
-                        node_id_to_new[fasz] = new_node_count
+                        node_id_to_new[(si, i // 2)] = new_node_count
                         new_node_count += 1
                         all_nodes.append(s[i])
                         node_owner_mask.append(cls.onehot(n_seq, si))

@@ -19,7 +19,11 @@ class Graph:
 
 
 def sample_softmax(tensor, dim=-1):
-    res = F.gumbel_softmax(tensor, dim=dim)
+    eps=1e-20
+
+    # Built in gumbel softmax could end up with lots of nans. Do it manually here.
+    noise = -torch.log(-torch.log(torch.empty_like(tensor).uniform_(eps,1)) + eps)
+    res = F.softmax(tensor + noise, dim=-1)
     _, res = res.max(dim=dim)
     return res
 
@@ -154,6 +158,9 @@ class NodeAdder(torch.nn.Module):
             selected_type = remap_pad(reference, self.pad_char)
             loss = loss + masked_cross_entropy_loss(new_node_types, None, selected_type, graph.running)
         else:
+            # Prevent generating empty graph. Set termination probability to 0 if generating the first element.
+            if graph.nodes.shape[0]==0:
+                new_node_types[:, 0]=float("-inf")
             selected_type = sample_softmax(new_node_types)
 
         # Update running flags. If no new node is generated, the graph generation is stopped
@@ -242,7 +249,6 @@ class EdgeAdder(torch.nn.Module):
 
             # Logits is a [batch_size, n_nodes * n_edge_types] tensor. A softmax over all of this is done, and
             # then sampled.
-
             owner_mask_expanded = graph.owner_masks.unsqueeze(-1).expand(-1,-1, self.n_edge_dtypes).contiguous().\
                                   view(graph.batch_size,-1)
 
