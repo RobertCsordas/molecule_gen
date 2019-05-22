@@ -18,6 +18,8 @@ parser.add_argument("-batch_size", type=int, default=128)
 parser.add_argument("-save_dir", type=str)
 parser.add_argument("-force", type=bool, default=0, save=False)
 parser.add_argument("-gpu", type=str, default="")
+parser.add_argument("-lr_milestones", default="none", parser=ArgumentParser.int_list_parser)
+parser.add_argument("-lr_gamma", default=0.3)
 opt = parser.parse_and_sync()
 
 
@@ -66,6 +68,9 @@ class Experiment:
         self.test_loss = None
         self.patience = 2
 
+
+        self.lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, opt.lr_milestones, opt.lr_gamma) \
+                            if opt.lr_milestones else None
         self.saver = Saver(self, os.path.join(opt.save_dir, "save"))
         self.saver.load()
 
@@ -93,7 +98,8 @@ class Experiment:
             "best_loss": self.best_loss,
             "best_loss_iteration": self.best_loss_iteration,
             "best_loss_epoch": self.best_loss_epoch,
-            "test_loss": self.test_loss
+            "test_loss": self.test_loss,
+            "lr_scheduler": self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None
         }
 
     def load_state_dict(self, state_dict):
@@ -108,6 +114,10 @@ class Experiment:
         self.best_loss_iteration = state_dict["best_loss_iteration"]
         self.best_loss_epoch = state_dict["best_loss_epoch"]
         self.test_loss = state_dict["test_loss"]
+        if self.lr_scheduler is not None:
+            s = state_dict.get("lr_scheduler")
+            if s is not None:
+                self.lr_scheduler.load_state_dict(s)
 
     def test(self, loader=None):
         self.model.eval()
@@ -191,6 +201,9 @@ class Experiment:
                 self.best_loss_epoch = self.epoch
             elif (self.epoch - self.best_loss_epoch) > self.patience:
                 running = False
+
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
 
             # Save the model
             self.saver.save(self.iteration)
