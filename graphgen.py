@@ -223,7 +223,7 @@ class EdgeAdder(torch.nn.Module):
             new_edge_needed = (self.f_addedge_aggregated(self.edge_decision_aggregator(graph)) +
                                self.f_addedge_new(new_nodes)).squeeze(-1)
 
-            if reference[add_index] is not None:
+            if reference is not None:
                 need_to_add = reference[add_index][1] != self.pad_char
                 loss = loss + masked_bce_loss(new_edge_needed, need_to_add, running)
             else:
@@ -244,15 +244,16 @@ class EdgeAdder(torch.nn.Module):
             # Logits is a [batch_size, n_nodes * n_edge_types] tensor. A softmax over all of this is done, and
             # then sampled.
 
+            owner_mask_expanded = graph.owner_masks.unsqueeze(-1).expand(-1,-1, self.n_edge_dtypes).contiguous().\
+                                  view(graph.batch_size,-1)
+
             if reference is not None:
                 selected_edge = reference[add_index][0].long() * self.n_edge_dtypes + \
                                  remap_pad(reference[add_index][1].long(), self.pad_char, lambda x: x)
 
-                loss = loss + masked_cross_entropy_loss(logits, graph.owner_masks.unsqueeze(-1).
-                                    expand(-1,-1, self.n_edge_dtypes).contiguous().view(graph.batch_size,-1),
-                                                        selected_edge, running)
+                loss = loss + masked_cross_entropy_loss(logits, owner_mask_expanded, selected_edge, running)
             else:
-                selected_edge = mask_softmax_input(logits, graph.owner_masks)
+                selected_edge = masked_softmax(logits, owner_mask_expanded)
 
             selected_type = selected_edge % self.n_edge_dtypes
             selected_other = selected_edge / self.n_edge_dtypes

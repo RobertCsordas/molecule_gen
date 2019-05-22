@@ -7,16 +7,17 @@ from graphgen import GraphGen
 from tqdm import tqdm
 from saver import Saver
 from visdom_helper import Plot2D
+from argument_parser import ArgumentParser
 import os
 
-parser = argparse.ArgumentParser(description='Process some integers.')
-parser.add_argument("-lr", type=float, default=1e-4)
+parser = ArgumentParser(description='Process some integers.')
+parser.add_argument("-lr", type=float, default=3e-4)
 parser.add_argument("-wd", type=float, default=0)
 parser.add_argument("-optimizer", default="adam")
-parser.add_argument("-batch_size", type=int, default=64)
+parser.add_argument("-batch_size", type=int, default=128)
 parser.add_argument("-save_dir", type=str)
 parser.add_argument("-gpu", type=str, default="")
-opt = parser.parse_args()
+opt = parser.parse_and_sync()
 
 
 class Experiment:
@@ -61,7 +62,7 @@ class Experiment:
         self.test_loss = None
         self.patience = 2
 
-        self.saver = Saver(self, opt.save_dir)
+        self.saver = Saver(self, os.path.join(opt.save_dir, "save"))
         self.saver.load()
 
     def _move_to_device(self, d):
@@ -166,6 +167,14 @@ class Experiment:
             # Save the model
             self.saver.save(self.iteration)
             self.epoch += 1
+
+    def train_done(self):
+        return self.test_loss is not None
+
+    def generate(self):
+        self.model.eval()
+        res = self.model.generate(256, self.device)
+        print(res)
 
 e = Experiment(opt)
 e.train()
