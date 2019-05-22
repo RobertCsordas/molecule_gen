@@ -33,8 +33,9 @@ class Chembl(torch.utils.data.Dataset):
         end = start + int(l*self.SPLITS[set_i])
         return array[start:end]
 
-    def __init__(self, split="train", max_atoms=20, random_order=False):
+    def __init__(self, split="train", max_atoms=20, random_order=False, verify_in_process=False):
         super().__init__()
+        self.verify_in_process = verify_in_process
         assert split in self.SPLIT_NAMES, "Invalid set: %s" % split
 
         if Chembl.dataset is None:
@@ -347,10 +348,16 @@ class Chembl(torch.utils.data.Dataset):
            "ratio_unique": (v["unique"] / v["n_ok"] if v["n_ok"] > 0 else 0)
         }
 
+    def _start_verification(self):
+        return dict(n_ok=0, n_total=0, n_new=0, unique=0, known=set())
+
     def start_verification(self):
+        if not self.verify_in_process:
+            return self._start_verification()
+
         # Verification is a slow process. So start background process to do it.
         def worker(queue):
-            data = dict(n_ok=0, n_total=0, n_new=0, unique=0, known=set())
+            data = self._start_verification()
             while True:
                 graph = queue.get()
                 if graph is None:
@@ -366,9 +373,15 @@ class Chembl(torch.utils.data.Dataset):
         return dict(process=p, queue=queue)
 
     def verify(self, v, graph):
+        if not self.verify_in_process:
+            return self._verify(v, graph)
+
         v["queue"].put(graph)
 
     def get_verification_results(self, v):
+        if not self.verify_in_process:
+            return self._get_verification_results(v)
+
         v["queue"].put(None)
         v["process"].join()
 
