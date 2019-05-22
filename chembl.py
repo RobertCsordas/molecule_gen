@@ -2,6 +2,7 @@ import urllib.request
 import os
 import gzip
 from rdkit import Chem
+from rdkit.Chem import Draw
 from rdkit import RDLogger
 import torch
 from tqdm import tqdm
@@ -296,7 +297,7 @@ class Chembl(torch.utils.data.Dataset):
         edge_type = graph.edge_types.cpu().numpy().tolist()
 
         # Edges are directed. So each edge is present 2 times in edge_*. Filter them out
-        added_edges = set()
+        added_edges = [set() for i in range(graph.batch_size)]
         for i, etype in enumerate(edge_type):
             batch, si = atom_maps[edge_src[i]]
             batch2, di = atom_maps[edge_dest[i]]
@@ -306,14 +307,14 @@ class Chembl(torch.utils.data.Dataset):
             if molecules[batch] is None:
                 continue
 
-            if (si, di) in added_edges or (di, si) in added_edges:
+            if (si, di) in added_edges[batch] or (di, si) in added_edges[batch]:
                 continue
 
             if si==di:
                 molecules[batch] = None
                 continue
 
-            added_edges.add((si,di))
+            added_edges[batch].add((si,di))
             molecules[batch].AddBond(si, di, self.dataset["id_to_bond_type"][etype])
 
         return molecules
@@ -379,6 +380,29 @@ class Chembl(torch.utils.data.Dataset):
 
     def get_max_bonds(self):
         return self.max_bonds
+
+    def draw_molecules(self, graphs):
+        mols = []
+
+        if not isinstance(graphs, list):
+            graphs = [graphs]
+
+        for graph in graphs:
+            for m in self.graph_to_molecules(graph):
+                if m is None:
+                    continue
+
+                try:
+                    Chem.SanitizeMol(m)
+                except:
+                    continue
+
+                mols.append(m)
+
+        if not mols:
+            return None
+
+        return Draw.MolsToGridImage(mols, molsPerRow=int(math.ceil(math.sqrt(len(mols)))))
 
 
 if __name__=="__main__":

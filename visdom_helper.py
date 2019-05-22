@@ -4,7 +4,7 @@ import time
 import visdom
 import sys
 import numpy as np
-
+import PIL
 vis = None
 port = None
 
@@ -175,6 +175,41 @@ class Plot2D:
 
         self._send_update()
 
+class Image:
+    def __init__(self, title, dumpdir=None):
+        _start_if_not_running()
+
+        self.win = None
+        self.opts = dict(title=title)
+        self.dumpdir = dumpdir
+
+    def set_dump_dir(self, dumpdir):
+        self.dumpdir = dumpdir
+
+
+    def draw(self, img):
+        if vis is None or img is None:
+            return
+
+        if isinstance(img, PIL.Image.Image):
+            img = np.asarray(img)
+            img = np.transpose(img[:,:,:], [2,0,1])
+
+        if img.dtype == np.uint8:
+            img = img.astype(np.float32) / 255
+
+        self.opts["width"] = img.shape[2]
+        self.opts["height"] = img.shape[1]
+        self.opts["jpgquality"] = 100
+
+        if vis is not None:
+            if self.win is None:
+                self.win = vis.image(img, opts=self.opts)
+            else:
+                vis.image(img, win=self.win, opts=self.opts)
+
+    def __call__(self, img):
+        self.draw(img)
 
 class Text:
     def __init__(self, title):

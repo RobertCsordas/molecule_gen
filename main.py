@@ -6,7 +6,7 @@ from chembl import Chembl
 from graphgen import GraphGen
 from tqdm import tqdm
 from saver import Saver
-from visdom_helper import Plot2D
+from visdom_helper import Plot2D, Image
 from argument_parser import ArgumentParser
 import os
 
@@ -16,6 +16,7 @@ parser.add_argument("-wd", type=float, default=0)
 parser.add_argument("-optimizer", default="adam")
 parser.add_argument("-batch_size", type=int, default=128)
 parser.add_argument("-save_dir", type=str)
+parser.add_argument("-force", type=bool, default=0, save=False)
 parser.add_argument("-gpu", type=str, default="")
 opt = parser.parse_and_sync()
 
@@ -53,6 +54,8 @@ class Experiment:
 
         self.loss_plot = Plot2D("loss", 10, xlabel="iter", ylabel="loss")
         self.valid_loss_plot = Plot2D("Validation loss", 1, xlabel="iter", ylabel="loss")
+        self.percent_valid = Plot2D("Valid molecules", 1, xlabel="iter", ylabel="%")
+        self.mol_images = Image("Molecules")
 
         self.iteration = 0
         self.epoch = 0
@@ -83,6 +86,8 @@ class Experiment:
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "loss_plot": self.loss_plot.state_dict(),
+            "valid_loss_plot": self.valid_loss_plot.state_dict(),
+            "percent_valid": self.percent_valid.state_dict(),
             "iteration": self.iteration,
             "epoch": self.epoch,
             "best_loss": self.best_loss,
@@ -94,7 +99,9 @@ class Experiment:
     def load_state_dict(self, state_dict):
         self.model.load_state_dict(state_dict["model"])
         self.optimizer.load_state_dict(state_dict["optimizer"])
+        self.valid_loss_plot.load_state_dict(state_dict["valid_loss_plot"])
         self.loss_plot.load_state_dict(state_dict["loss_plot"])
+        self.percent_valid.load_state_dict(state_dict["percent_valid"])
         self.iteration = state_dict["iteration"]
         self.epoch = state_dict["epoch"]
         self.best_loss = state_dict["best_loss"]
@@ -132,6 +139,19 @@ class Experiment:
         print("    Iteration:", self.best_loss_iteration)
         self.saver.save("best")
 
+    def display_generated(self):
+        self.model.eval()
+        graphs = []
+        with torch.no_grad():
+            for i in range(1):
+                g = self.model.generate(32, self.device)
+                g = g.get_final_graph()
+                graphs.append(g)
+
+        self.model.train()
+        img = self.train_set.draw_molecules(graphs)
+        self.mol_images.draw(img)
+
     def train(self):
         running = True
         while running:
@@ -154,10 +174,15 @@ class Experiment:
                 self.optimizer.step()
 
                 self.iteration += 1
+                if self.iteration % 30 == 0:
+                    self.display_generated()
 
             # Do a validation step
             validation_loss = self.test(self.valid_loader)
             self.valid_loss_plot.add_point(self.iteration, validation_loss)
+
+            g = self.generate(10000)
+            self.percent_valid.add_point(self.iteration, g["ratio_ok"]*100)
 
             # Early stopping
             if validation_loss <= self.best_loss:
@@ -188,7 +213,7 @@ class Experiment:
         return self.train_set.get_verification_results(v)
 
 e = Experiment(opt)
-if not e.train_done():
+if (not e.train_done()) or opt.force:
     e.train()
     e.do_final_test()
 # e.train()
