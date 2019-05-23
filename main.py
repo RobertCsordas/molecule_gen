@@ -37,11 +37,11 @@ class Experiment:
         self.valid_set = Chembl("valid")
         self.test_set = Chembl("test")
         self.train_loader = torch.utils.data.DataLoader(self.train_set, batch_size=opt.batch_size, shuffle=True,
-                                                        collate_fn=Chembl.collate, num_workers=1)
+                                                        collate_fn=Chembl.collate, num_workers=1, pin_memory=True)
         self.valid_loader = torch.utils.data.DataLoader(self.valid_set, batch_size=256, shuffle=False,
-                                                        collate_fn=Chembl.collate, num_workers=1)
+                                                        collate_fn=Chembl.collate, num_workers=1, pin_memory=True)
         self.test_loader = torch.utils.data.DataLoader(self.test_set, batch_size=256, shuffle=False,
-                                                        collate_fn=Chembl.collate, num_workers=1)
+                                                        collate_fn=Chembl.collate, num_workers=1, pin_memory=True)
 
         self.model = GraphGen(self.train_set.n_node_types(), self.train_set.n_edge_types(), 128,
                               n_max_nodes=30, n_max_edges=2*self.train_set.get_max_bonds())

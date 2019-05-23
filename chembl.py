@@ -72,8 +72,6 @@ class Chembl(torch.utils.data.Dataset):
                             continue
 
                         Chem.SanitizeMol(m)
-                        # The molecule must be kekulized, otherwise the bonds will not always be consistent.
-                        Chem.Kekulize(m)
 
                         for a in m.GetAtoms():
                             atom_types.add(a.GetSymbol())
@@ -137,7 +135,6 @@ class Chembl(torch.utils.data.Dataset):
 
         m = Chem.MolFromSmiles(self.used_set[item])
         Chem.SanitizeMol(m)
-        Chem.Kekulize(m)
 
         atom_to_index = {}
 
@@ -314,12 +311,11 @@ class Chembl(torch.utils.data.Dataset):
             added_edges[batch].add((si,di))
             molecules[batch].AddBond(si, di, self.dataset["id_to_bond_type"][etype])
 
-        # Sanitize and kekulize the molecule
+        # Sanitize the molecule
         final = []
         for m in molecules:
             try:
                 Chem.SanitizeMol(m)
-                Chem.Kekulize(m)
                 final.append(m)
             except:
                 final.append(None)

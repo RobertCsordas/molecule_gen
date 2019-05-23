@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+
 class Graph:
     def __init__(self, batch_size, state_size, device):
         self.batch_size = batch_size
