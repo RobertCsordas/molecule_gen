@@ -72,6 +72,7 @@ class Chembl(torch.utils.data.Dataset):
                             continue
 
                         Chem.SanitizeMol(m)
+                        Chem.Kekulize(m)
 
                         for a in m.GetAtoms():
                             atom_types.add(a.GetSymbol())
@@ -115,6 +116,8 @@ class Chembl(torch.utils.data.Dataset):
         print("%d atoms match the count limit" % len(self.used_set))
         self.used_set = self._get_split(self.used_set, split)
         print("%d atoms used for %s set." % (len(self.used_set), split))
+        print("Atom types:", self.dataset["atom_types"])
+        print("Bond types:", self.dataset["bond_types"])
 
         self.random_order = random_order
         self.seed = None
@@ -129,6 +132,8 @@ class Chembl(torch.utils.data.Dataset):
         schema = []
 
         m = Chem.MolFromSmiles(self.used_set[item])
+        Chem.SanitizeMol(m)
+        Chem.Kekulize(m)
 
         atom_to_index = {}
 
@@ -318,7 +323,17 @@ class Chembl(torch.utils.data.Dataset):
             added_edges[batch].add((si,di))
             molecules[batch].AddBond(si, di, self.dataset["id_to_bond_type"][etype])
 
-        return molecules
+        # Sanitize and kekulize the molecule
+        final = []
+        for m in molecules:
+            try:
+                Chem.SanitizeMol(m)
+                Chem.Kekulize(m)
+                final.append(m)
+            except:
+                final.append(None)
+
+        return final
 
     def _verify(self, v, graph):
         molecules = self.graph_to_molecules(graph)
@@ -329,11 +344,7 @@ class Chembl(torch.utils.data.Dataset):
             if m is None:
                 continue
 
-            try:
-                s = Chem.SanitizeMol(m)
-                canonical_smiles = Chem.MolToSmiles(m)
-            except:
-                continue
+            canonical_smiles = Chem.MolToSmiles(m)
 
             v["n_ok"] += 1
             v["n_new"] += int(canonical_smiles not in self.used_set)

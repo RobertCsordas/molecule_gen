@@ -11,7 +11,7 @@ from argument_parser import ArgumentParser
 import os
 
 parser = ArgumentParser(description='Process some integers.')
-parser.add_argument("-lr", type=float, default=3e-4)
+parser.add_argument("-lr", type=float, default=1e-4)
 parser.add_argument("-wd", type=float, default=0)
 parser.add_argument("-optimizer", default="adam")
 parser.add_argument("-batch_size", type=int, default=128)
