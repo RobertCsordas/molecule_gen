@@ -4,6 +4,8 @@ import math
 
 class Graph:
     def __init__(self, batch_size, state_size, device):
+        if batch_size is None:
+            return
         self.batch_size = batch_size
         self.device = device
 
@@ -63,14 +65,17 @@ def sample_binary(tensor):
     return torch.rand_like(tensor) < tensor
 
 def xavier_init(layer, scale, n_inputs=None, n_outputs=None):
-    # return
     n_inputs = n_inputs if n_inputs is not None else layer.weight.shape[1]
     n_outputs = n_outputs if n_outputs is not None else layer.weight.shape[0]
     limits = math.sqrt(6.0 * scale / (n_inputs + n_outputs))
     layer.weight.data.uniform_(-limits, limits)
 
+    # std = math.sqrt(2.0 * scale / (n_inputs + n_outputs))
+    # layer.weight.data.normal_(std=std)
+
     if layer.bias is not None:
-        layer.bias.data.uniform_(-limits, limits)
+        # layer.bias.data.uniform_(-limits, limits)
+        torch.nn.init.normal_(layer.bias)
 
 
 class Aggregator(torch.nn.Module):
@@ -243,6 +248,7 @@ class NodeAdder(torch.nn.Module):
         return graph, loss
 
     def _reset_parameters(self, state_size, aggregated_size):
+        torch.nn.init.normal_(self.node_type_embedding)
         xavier_init(self.f_init_part1, 1, state_size + aggregated_size, state_size)
         xavier_init(self.f_init_part2, 1, state_size + aggregated_size, state_size)
         xavier_init(self.node_type_decision, 1)
@@ -345,6 +351,7 @@ class EdgeAdder(torch.nn.Module):
         return graph, loss
 
     def _reset_paramters(self, state_size, aggregated_size, n_edge_dtypes):
+        torch.nn.init.normal_(self.edge_init)
         xavier_init(self.f_addedge_aggregated, 1, state_size + aggregated_size, 1)
         xavier_init(self.f_addedge_new, 1, state_size + aggregated_size, 1)
         xavier_init(self.fs_layer1_target, 1, state_size * 2, n_edge_dtypes)
