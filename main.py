@@ -66,7 +66,7 @@ class Experiment:
         self.best_loss_iteration = 0
         self.best_loss_epoch = 0
         self.test_loss = None
-        self.patience = 2
+        self.patience = 5
 
 
         self.lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, opt.lr_milestones, opt.lr_gamma) \

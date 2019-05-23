@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-
+import math
 
 class Graph:
     def __init__(self, batch_size, state_size, device):
@@ -31,7 +31,7 @@ def sample_softmax(tensor, dim=-1):
     eps=1e-20
 
     # Built in gumbel softmax could end up with lots of nans. Do it manually here.
-    noise = -torch.log(-torch.log(torch.empty_like(tensor).uniform_(eps,1)) + eps)
+    noise = -torch.log(-torch.log(torch.rand_like(tensor)+eps) + eps)
     res = F.softmax(tensor + noise, dim=-1)
     _, res = res.max(dim=dim)
     return res
@@ -60,19 +60,34 @@ def masked_bce_loss(tensor, target, enabled):
 
 def sample_binary(tensor):
     tensor = torch.sigmoid(tensor)
-    return torch.empty_like(tensor).uniform_(0,1) < tensor
+    return torch.rand_like(tensor) < tensor
+
+def xavier_init(layer, scale, n_inputs=None, n_outputs=None):
+    # return
+    n_inputs = n_inputs if n_inputs is not None else layer.weight.shape[1]
+    n_outputs = n_outputs if n_outputs is not None else layer.weight.shape[0]
+    limits = math.sqrt(6.0 * scale / (n_inputs + n_outputs))
+    layer.weight.data.uniform_(-limits, limits)
+
+    if layer.bias is not None:
+        layer.bias.data.uniform_(-limits, limits)
+
 
 class Aggregator(torch.nn.Module):
     def __init__(self, state_size, aggregated_size):
         super().__init__()
 
-        self.transform = torch.nn.Linear(state_size, aggregated_size)
+        self.transform = torch.nn.Sequential(
+            torch.nn.Linear(state_size, aggregated_size),
+            # torch.nn.Tanh() # Note: not present in the paper
+        )
         self.gate = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
             torch.nn.Sigmoid()
         )
 
         self.state_size = aggregated_size
+        self._reset_parameters()
 
     def forward(self, graph: Graph):
         if graph.nodes.shape[0]==0:
@@ -81,7 +96,15 @@ class Aggregator(torch.nn.Module):
         gates = self.gate(graph.nodes)
         data = self.transform(graph.nodes)
 
-        return torch.mm(graph.owner_masks.float(), data * gates)
+        fmask = graph.owner_masks.float()
+        # Normalize the result with the number of nodes.
+        norm = fmask.sum(-1, keepdim=True).clamp(min=1) # Note: not present in the paper
+
+        return torch.mm(fmask, data * gates)/norm
+
+    def _reset_parameters(self):
+        xavier_init(self.transform[0], 1)
+        xavier_init(self.gate[0], 1)
 
 
 class Propagator(torch.nn.Module):
@@ -97,6 +120,12 @@ class Propagator(torch.nn.Module):
         self.message_destnode = torch.nn.Linear(state_size, self.message_size)
         self.message_srcnode = torch.nn.Linear(state_size, self.message_size, bias=False)
         self.message_features = torch.nn.Linear(state_size, self.message_size, bias=False)
+
+        # self.message_layer_2 = torch.nn.Sequential(
+        #     torch.nn.Tanh(),
+        #     torch.nn.Linear(self.message_size, self.message_size)
+        # )
+        self._reset_parameters(state_size)
 
     @staticmethod
     def _node_update_mask(graph: Graph, mask_override: torch.ByteTensor):
@@ -115,19 +144,30 @@ class Propagator(torch.nn.Module):
         edge_features = self.message_features(graph.edge_features)
 
         messages = edge_src + edge_dest + edge_features
+        # messages = self.message_layer_2(messages) # Not present in the paper
         # In case of multiple layers, subsequent layers should come here
 
         # Sum the messages for each node
         inputs = torch.zeros(graph.nodes.shape[0], self.message_size, device=graph.nodes.device,
-                             dtype=graph.nodes.dtype)
+                             dtype=graph.nodes.dtype).index_add_(0, graph.edge_dest, messages)
 
-        inputs.index_add_(0, graph.edge_dest, messages)
+        # Normalize sum of messages by the number of nodes
+        norm = torch.zeros(graph.nodes.shape[0], device=graph.nodes.device, dtype=torch.float32).\
+               index_add_(0, graph.edge_dest, torch.ones(*graph.edge_dest.shape, device=graph.device, dtype=torch.float32))
+        
+        inputs = inputs / norm.unsqueeze(-1).clamp(min=1) # Note: not present in the paper
 
         # Transform node state of running nodes
         new_nodes = self.node_update_fn(inputs, graph.nodes)
 
         graph.nodes = torch.where(self._node_update_mask(graph, mask_override).unsqueeze(-1), new_nodes, graph.nodes)
         return graph
+
+    def _reset_parameters(self, state_size):
+        xavier_init(self.message_destnode, 1, state_size * 3, self.message_size)
+        xavier_init(self.message_srcnode, 1, state_size * 3, self.message_size)
+        xavier_init(self.message_features, 1, state_size * 3, self.message_size)
+        # xavier_init(self.message_layer_2[1], 1)
 
 
 class MultilayerPropagator(torch.nn.Module):
@@ -157,6 +197,7 @@ class NodeAdder(torch.nn.Module):
 
         self.f_init_part1 = torch.nn.Linear(state_size, state_size)
         self.f_init_part2 = torch.nn.Linear(aggregated_size, state_size, bias=False)
+        self._reset_parameters(state_size, aggregated_size)
 
     def forward(self, graph: Graph, reference: torch.ByteTensor):
         loss = 0
@@ -201,6 +242,11 @@ class NodeAdder(torch.nn.Module):
 
         return graph, loss
 
+    def _reset_parameters(self, state_size, aggregated_size):
+        xavier_init(self.f_init_part1, 1, state_size + aggregated_size, state_size)
+        xavier_init(self.f_init_part2, 1, state_size + aggregated_size, state_size)
+        xavier_init(self.node_type_decision, 1)
+
 
 class EdgeAdder(torch.nn.Module):
     def __init__(self, state_size, aggregated_size, n_edge_dtypes, pad_char, propagate_steps, n_max_edges):
@@ -221,6 +267,8 @@ class EdgeAdder(torch.nn.Module):
 
         self.fs_layer1_target = torch.nn.Linear(state_size, n_edge_dtypes)
         self.fs_layer1_new = torch.nn.Linear(state_size, n_edge_dtypes, bias=False)
+
+        self._reset_paramters(state_size, aggregated_size, n_edge_dtypes)
 
     def forward(self, graph: Graph, reference):
         # Decide whether to add an edge.
@@ -295,6 +343,12 @@ class EdgeAdder(torch.nn.Module):
             add_index += 1
 
         return graph, loss
+
+    def _reset_paramters(self, state_size, aggregated_size, n_edge_dtypes):
+        xavier_init(self.f_addedge_aggregated, 1, state_size + aggregated_size, 1)
+        xavier_init(self.f_addedge_new, 1, state_size + aggregated_size, 1)
+        xavier_init(self.fs_layer1_target, 1, state_size * 2, n_edge_dtypes)
+        xavier_init(self.fs_layer1_new, 1, state_size * 2, n_edge_dtypes)
 
 
 class GraphGen(torch.nn.Module):
