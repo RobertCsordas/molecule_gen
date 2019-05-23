@@ -127,10 +127,10 @@ class Experiment:
         with torch.no_grad():
             for d in tqdm(loader):
                 d = self._move_to_device(d)
-                _, loss = self.model(d[0])
+                _, loss = self.model(d)
 
-                cnt += d[0][0].shape[0]
-                loss_sum += loss.item() * d[0][0].shape[0]
+                cnt += d[0].shape[0]
+                loss_sum += loss.item() * d[0].shape[0]
 
         loss = loss_sum / cnt
         return loss
@@ -170,11 +170,8 @@ class Experiment:
             self.model.train()
             for d in tqdm(self.train_loader):
                 d = self._move_to_device(d)
-                # print(d)
-                g, loss = self.model(d[0])
+                g, loss = self.model(d)
                 assert torch.isfinite(loss), "Loss is %s" % loss.item()
-
-                # self.train_set.graph_to_molecules(g)
 
                 self.loss_plot.add_point(self.iteration, loss.item())
 

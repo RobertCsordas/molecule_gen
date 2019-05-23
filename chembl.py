@@ -72,6 +72,7 @@ class Chembl(torch.utils.data.Dataset):
                             continue
 
                         Chem.SanitizeMol(m)
+                        # The molecule must be kekulized, otherwise the bonds will not always be consistent.
                         Chem.Kekulize(m)
 
                         for a in m.GetAtoms():
@@ -107,6 +108,7 @@ class Chembl(torch.utils.data.Dataset):
         self.dataset["atom_type_to_id"] = {v: k for k, v in enumerate(self.dataset["atom_types"])}
         self.dataset["id_to_atom_type"] = {k: v for k, v in enumerate(self.dataset["atom_types"])}
 
+        # Limit the number of atoms.
         used_smiles = [s for i, s in enumerate(self.dataset["smiles"]) if self.dataset["heavy_atom_count"][i] <= max_atoms]
         self.used_set = used_smiles
 
@@ -126,6 +128,8 @@ class Chembl(torch.utils.data.Dataset):
         return len(self.used_set)
 
     def __getitem__(self, item):
+        # Load a molecule from SMILES and generate a sequence of graph constructing operations from it. The sequence
+        # must end with a padding character. That ensures that the generation process will terminate.
         if self.seed is None:
             self.seed = np.random.RandomState()
 
@@ -141,7 +145,6 @@ class Chembl(torch.utils.data.Dataset):
         iterator = self.seed.choice(len(atoms), len(atoms), replace=False).tolist() if self.random_order else\
                    range(len(atoms))
 
-
         next_atom_index = 0
         for ai in iterator:
             atom = atoms[ai]
@@ -153,6 +156,7 @@ class Chembl(torch.utils.data.Dataset):
             iter2 = self.seed.choice(len(bonds), len(bonds), replace=False).tolist() if self.random_order else\
                    range(len(bonds))
 
+            # Add all the bonds to all the atoms that already exists
             for bi in iter2:
                 bond = bonds[bi]
                 other_atom = bond.GetBeginAtomIdx()
@@ -175,25 +179,15 @@ class Chembl(torch.utils.data.Dataset):
         return schema
 
 
-    @staticmethod
-    def onehot(len, index):
-        a = [0]*len
-        a[index] = 1
-        return a
-
     @classmethod
     def batchify(cls, seq_list):
-        # Output data[0] is a list of operations that should be done. Even (0,2,..) elements of the list are the
-        # nodes that should be added, the odd ones (1,3...) are the lists of nodes to be added. Each element of
-        # this list is a touple of (parent node ID, node type). The elements of this tuple are no. of batches long
+        # Output is a list of operations that should be done. Even (0,2,..) elements of the list are the
+        # nodes that should be added, the odd ones (1,3...) are the lists of edges to be added. Each element of
+        # this list is a tuple of (parent node ID, node type). The elements of this tuple are no. of batches long
         # lists.
-        #
-        # Output data[1] is a tensor with one-hot columns indicating to which batch a the given node belongs to.
 
         res = []
-        node_owner_mask = []
 
-        n_seq = len(seq_list)
         longest = max(len(s) for s in seq_list)
 
         new_node_count = 0
@@ -202,21 +196,18 @@ class Chembl(torch.utils.data.Dataset):
         for i in range(longest):
             if i % 2 == 0:
                 # It's a node.
-
                 all_nodes = []
                 for si, s in enumerate(seq_list):
-                    if i >= len(s) or s[i]==cls.PAD_CHAR:
+                    if i >= len(s) or s[i] == cls.PAD_CHAR:
                         all_nodes.append(cls.PAD_CHAR)
                     else:
                         node_id_to_new[(si, i // 2)] = new_node_count
                         new_node_count += 1
                         all_nodes.append(s[i])
-                        node_owner_mask.append(cls.onehot(n_seq, si))
 
                 res.append(all_nodes)
             else:
                 # It's an edge
-
                 this_edge_set = []
                 max_edges = max(len(s[i]) for s in seq_list if i<len(s))
 
@@ -236,10 +227,10 @@ class Chembl(torch.utils.data.Dataset):
 
                 res.append(this_edge_set)
 
-        return res, node_owner_mask
+        return res
 
     @staticmethod
-    def to_tensor(batched_seq, owner_mask):
+    def to_tensor(batched_seq):
         res = []
         for si, s in enumerate(batched_seq):
             if si % 2 == 0:
@@ -247,11 +238,11 @@ class Chembl(torch.utils.data.Dataset):
             else:
                 res.append([(torch.tensor(a[0], dtype=torch.int16), torch.tensor(a[1], dtype=torch.uint8)) for a in s])
 
-        return res, torch.tensor(owner_mask, dtype=torch.uint8)
+        return res
 
     @classmethod
     def collate(cls, seq):
-        return cls.to_tensor(*cls.batchify(seq))
+        return cls.to_tensor(cls.batchify(seq))
 
     def n_node_types(self):
         return len(self.dataset["atom_types"])
@@ -285,6 +276,7 @@ class Chembl(torch.utils.data.Dataset):
                             assert atom_owner[l] == bi, "Atom %d owner: %d != link %d" % (l, atom_owner[l], bi)
 
     def graph_to_molecules(self, graph):
+        # Converts a graph output from the network to an RDKit molecule
         molecules = [Chem.RWMol() for i in range(graph.batch_size)]
         atom_counts = [0 for i in range(graph.batch_size)]
 
@@ -292,7 +284,6 @@ class Chembl(torch.utils.data.Dataset):
         owners = graph.owner_masks.max(0)[1].cpu().numpy().tolist()
 
         atom_maps = {}
-
         for i, a in enumerate(atoms):
             molecules[owners[i]].AddAtom(Chem.Atom(self.dataset["id_to_atom_type"][a]))
             atom_maps[i] = (owners[i], atom_counts[owners[i]])
@@ -336,6 +327,7 @@ class Chembl(torch.utils.data.Dataset):
         return final
 
     def _verify(self, v, graph):
+        # Count valid, new and unique molecules.
         molecules = self.graph_to_molecules(graph)
 
         for m in molecules:
@@ -353,6 +345,7 @@ class Chembl(torch.utils.data.Dataset):
                 v["known"].add(canonical_smiles)
 
     def _get_verification_results(self, v):
+        # Compute the result of the verification process
         return {
            "ratio_ok": v["n_ok"] / v["n_total"],
            "ratio_not_in_training": (v["n_new"] / v["n_ok"] if v["n_ok"] > 0 else 0),
