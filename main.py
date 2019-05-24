@@ -21,6 +21,7 @@ parser.add_argument("-gpu", type=str, default="")
 parser.add_argument("-lr_milestones", default="none", parser=ArgumentParser.int_list_parser)
 parser.add_argument("-lr_gamma", default=0.3)
 parser.add_argument("-dropout", default=0.0)
+parser.add_argument("-state_size", default=128)
 opt = parser.parse_and_sync()
 
 
@@ -44,7 +45,7 @@ class Experiment:
         self.test_loader = torch.utils.data.DataLoader(self.test_set, batch_size=256, shuffle=False,
                                                         collate_fn=Chembl.collate, num_workers=1, pin_memory=True)
 
-        self.model = GraphGen(self.train_set.n_node_types(), self.train_set.n_edge_types(), 128,
+        self.model = GraphGen(self.train_set.n_node_types(), self.train_set.n_edge_types(), opt.state_size,
                               n_max_nodes=30, n_max_edges=2*self.train_set.get_max_bonds(), dropout=opt.dropout)
         self.model = self.model.to(self.device)
 
