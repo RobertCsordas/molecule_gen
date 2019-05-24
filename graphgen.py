@@ -67,14 +67,10 @@ def sample_binary(tensor):
 def xavier_init(layer, scale, n_inputs=None, n_outputs=None):
     n_inputs = n_inputs if n_inputs is not None else layer.weight.shape[1]
     n_outputs = n_outputs if n_outputs is not None else layer.weight.shape[0]
-    limits = math.sqrt(6.0 * scale / (n_inputs + n_outputs))
+    limits = scale * math.sqrt(6.0 / (n_inputs + n_outputs))
     layer.weight.data.uniform_(-limits, limits)
 
-    # std = math.sqrt(2.0 * scale / (n_inputs + n_outputs))
-    # layer.weight.data.normal_(std=std)
-
     if layer.bias is not None:
-        # layer.bias.data.uniform_(-limits, limits)
         torch.nn.init.normal_(layer.bias)
 
 
@@ -84,7 +80,7 @@ class Aggregator(torch.nn.Module):
 
         self.transform = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
-            # torch.nn.Tanh() # Note: not present in the paper
+            torch.nn.Tanh() # Note: not present in the paper
         )
         self.gate = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
@@ -102,13 +98,13 @@ class Aggregator(torch.nn.Module):
         data = self.transform(graph.nodes)
 
         fmask = graph.owner_masks.float()
-        # Normalize the result with the number of nodes.
-        norm = fmask.sum(-1, keepdim=True).clamp(min=1) # Note: not present in the paper
+        res = torch.mm(fmask, data * gates)
 
-        return torch.mm(fmask, data * gates)/norm
+        # Normalize the result with the number of nodes.
+        return res/fmask.sum(-1, keepdim=True).clamp(min=1) # Note: not present in the paper
 
     def _reset_parameters(self):
-        xavier_init(self.transform[0], 1)
+        xavier_init(self.transform[0], torch.nn.init.calculate_gain("tanh"))
         xavier_init(self.gate[0], 1)
 
 
@@ -159,7 +155,7 @@ class Propagator(torch.nn.Module):
         # Normalize sum of messages by the number of nodes
         norm = torch.zeros(graph.nodes.shape[0], device=graph.nodes.device, dtype=torch.float32).\
                index_add_(0, graph.edge_dest, torch.ones(*graph.edge_dest.shape, device=graph.device, dtype=torch.float32))
-        
+
         inputs = inputs / norm.unsqueeze(-1).clamp(min=1) # Note: not present in the paper
 
         # Transform node state of running nodes
@@ -169,9 +165,10 @@ class Propagator(torch.nn.Module):
         return graph
 
     def _reset_parameters(self, state_size):
-        xavier_init(self.message_destnode, 1, state_size * 3, self.message_size)
-        xavier_init(self.message_srcnode, 1, state_size * 3, self.message_size)
-        xavier_init(self.message_features, 1, state_size * 3, self.message_size)
+        msg_gain = # torch.nn.init.calculate_gain("tanh")
+        xavier_init(self.message_destnode, msg_gain, state_size * 3, self.message_size)
+        xavier_init(self.message_srcnode, msg_gain, state_size * 3, self.message_size)
+        xavier_init(self.message_features, msg_gain, state_size * 3, self.message_size)
         # xavier_init(self.message_layer_2[1], 1)
 
 
