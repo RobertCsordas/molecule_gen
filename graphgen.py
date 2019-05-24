@@ -75,17 +75,19 @@ def xavier_init(layer, scale, n_inputs=None, n_outputs=None):
 
 
 class Aggregator(torch.nn.Module):
-    def __init__(self, state_size, aggregated_size):
+    def __init__(self, state_size, aggregated_size, dropout):
         super().__init__()
 
         self.transform = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
-            torch.nn.Tanh() # Note: not present in the paper
+            # torch.nn.Tanh() # Note: not present in the paper
         )
         self.gate = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
             torch.nn.Sigmoid()
         )
+
+        self.drop = torch.nn.Dropout(dropout)
 
         self.state_size = aggregated_size
         self._reset_parameters()
@@ -101,7 +103,8 @@ class Aggregator(torch.nn.Module):
         res = torch.mm(fmask, data * gates)
 
         # Normalize the result with the number of nodes.
-        return res/fmask.sum(-1, keepdim=True).clamp(min=1) # Note: not present in the paper
+        res = res/fmask.sum(-1, keepdim=True).clamp(min=1) # Note: not present in the paper
+        return self.drop(res)
 
     def _reset_parameters(self):
         xavier_init(self.transform[0], torch.nn.init.calculate_gain("tanh"))
@@ -109,7 +112,7 @@ class Aggregator(torch.nn.Module):
 
 
 class Propagator(torch.nn.Module):
-    def __init__(self, state_size):
+    def __init__(self, state_size, dropout):
         super().__init__()
 
         self.message_size = state_size * 2
@@ -126,6 +129,8 @@ class Propagator(torch.nn.Module):
         #     torch.nn.Tanh(),
         #     torch.nn.Linear(self.message_size, self.message_size)
         # )
+
+        self.dropout = torch.nn.Dropout(dropout)
         self._reset_parameters(state_size)
 
     @staticmethod
@@ -148,6 +153,7 @@ class Propagator(torch.nn.Module):
         # messages = self.message_layer_2(messages) # Not present in the paper
         # In case of multiple layers, subsequent layers should come here
 
+        messages = self.dropout(messages)
         # Sum the messages for each node
         inputs = torch.zeros(graph.nodes.shape[0], self.message_size, device=graph.nodes.device,
                              dtype=graph.nodes.dtype).index_add_(0, graph.edge_dest, messages)
@@ -158,6 +164,8 @@ class Propagator(torch.nn.Module):
 
         inputs = inputs / norm.unsqueeze(-1).clamp(min=1) # Note: not present in the paper
 
+        inputs = self.dropout(inputs)
+
         # Transform node state of running nodes
         new_nodes = self.node_update_fn(inputs, graph.nodes)
 
@@ -165,7 +173,7 @@ class Propagator(torch.nn.Module):
         return graph
 
     def _reset_parameters(self, state_size):
-        msg_gain = # torch.nn.init.calculate_gain("tanh")
+        msg_gain = 1# torch.nn.init.calculate_gain("tanh")
         xavier_init(self.message_destnode, msg_gain, state_size * 3, self.message_size)
         xavier_init(self.message_srcnode, msg_gain, state_size * 3, self.message_size)
         xavier_init(self.message_features, msg_gain, state_size * 3, self.message_size)
@@ -173,9 +181,9 @@ class Propagator(torch.nn.Module):
 
 
 class MultilayerPropagator(torch.nn.Module):
-    def __init__(self, state_size, n_steps):
+    def __init__(self, state_size, n_steps, dropout):
         super().__init__()
-        self.propagators = torch.nn.ModuleList([Propagator(state_size) for i in range(n_steps)])
+        self.propagators = torch.nn.ModuleList([Propagator(state_size, dropout) for i in range(n_steps)])
 
     def forward(self, graph: Graph, *args, **kwargs):
         for p in self.propagators:
@@ -184,14 +192,14 @@ class MultilayerPropagator(torch.nn.Module):
 
 
 class NodeAdder(torch.nn.Module):
-    def __init__(self, state_size, aggregated_size, propagate_steps, n_node_types, pad_char):
+    def __init__(self, state_size, aggregated_size, propagate_steps, n_node_types, pad_char, dropout):
         super().__init__()
 
         self.pad_char = pad_char
 
-        self.propagator = MultilayerPropagator(state_size, propagate_steps)
-        self.decision_aggregator = Aggregator(state_size, aggregated_size)
-        self.init_aggregator = Aggregator(state_size, aggregated_size)
+        self.propagator = MultilayerPropagator(state_size, propagate_steps, dropout)
+        self.decision_aggregator = Aggregator(state_size, aggregated_size, dropout)
+        self.init_aggregator = Aggregator(state_size, aggregated_size, dropout)
 
         self.node_type_decision = torch.nn.Linear(aggregated_size, n_node_types+1)
 
@@ -252,18 +260,18 @@ class NodeAdder(torch.nn.Module):
 
 
 class EdgeAdder(torch.nn.Module):
-    def __init__(self, state_size, aggregated_size, n_edge_dtypes, pad_char, propagate_steps, n_max_edges):
+    def __init__(self, state_size, aggregated_size, n_edge_dtypes, pad_char, propagate_steps, n_max_edges, dropout):
         super().__init__()
 
         self.pad_char = pad_char
         self.n_edge_dtypes = n_edge_dtypes
         self.n_max_edges = n_max_edges
 
-        self.propagator = MultilayerPropagator(state_size, propagate_steps)
+        self.propagator = MultilayerPropagator(state_size, propagate_steps, dropout)
 
-        self.edge_decision_aggregator = Aggregator(state_size, aggregated_size)
+        self.edge_decision_aggregator = Aggregator(state_size, aggregated_size, dropout)
         self.edge_init = torch.nn.Parameter(torch.Tensor(n_edge_dtypes, state_size))
-        self.edge_init_aggregator = Aggregator(state_size, aggregated_size)
+        self.edge_init_aggregator = Aggregator(state_size, aggregated_size, dropout)
 
         self.f_addedge_aggregated = torch.nn.Linear(aggregated_size, 1)
         self.f_addedge_new = torch.nn.Linear(state_size, 1, bias=False)
@@ -284,6 +292,7 @@ class EdgeAdder(torch.nn.Module):
         add_index = 0
 
         new_nodes = graph.nodes.index_select(0, graph.last_inserted_node)
+
         while True:
             graph = self.propagator(graph, running)
 
@@ -357,7 +366,7 @@ class EdgeAdder(torch.nn.Module):
 
 class GraphGen(torch.nn.Module):
     def __init__(self, n_node_types, n_edge_types, state_size, pad_char=255, propagate_steps=2,
-                 n_max_nodes=None, n_max_edges=None):
+                 n_max_nodes=None, n_max_edges=None, dropout=0.2):
         super().__init__()
 
         self.aggregated_size = state_size * 2
@@ -365,8 +374,8 @@ class GraphGen(torch.nn.Module):
 
         self.n_max_nodes = n_max_nodes
 
-        self.edge_adder = EdgeAdder(state_size, self.aggregated_size, n_edge_types, pad_char, propagate_steps, n_max_edges)
-        self.node_adder = NodeAdder(state_size, self.aggregated_size, propagate_steps, n_node_types, pad_char)
+        self.edge_adder = EdgeAdder(state_size, self.aggregated_size, n_edge_types, pad_char, propagate_steps, n_max_edges, dropout)
+        self.node_adder = NodeAdder(state_size, self.aggregated_size, propagate_steps, n_node_types, pad_char, dropout)
 
     def forward(self, ref_output, batch_size=None, device=None):
         assert ((ref_output is None) and (batch_size is not None and device is not None)) or \
