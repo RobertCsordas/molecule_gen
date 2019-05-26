@@ -446,12 +446,13 @@ class Chembl(torch.utils.data.Dataset):
         atom_counts = [0 for i in range(graph.batch_size)]
 
         atoms = graph.node_types.cpu().numpy().tolist()
-        owners = graph.owner_masks.max(0)[1].cpu().numpy().tolist()
+        owners_g = graph.owner_masks.max(0)[1]
+        owners = owners_g.cpu().numpy().tolist()
 
         atom_maps = {}
         for i, a in enumerate(atoms):
-            #molecules[owners[i]].AddAtom(Chem.Atom(self.dataset["id_to_atom_type"][a]))
-            molecules[owners[i]].AddAtom(self._str_to_atom(self.dataset["id_to_atom_type"][a]))
+            molecules[owners[i]].AddAtom(Chem.Atom(self.dataset["id_to_atom_type"][a]))
+            # molecules[owners[i]].AddAtom(self._str_to_atom(self.dataset["id_to_atom_type"][a]))
             atom_maps[i] = (owners[i], atom_counts[owners[i]])
             atom_counts[owners[i]] += 1
 
@@ -471,7 +472,10 @@ class Chembl(torch.utils.data.Dataset):
                 continue
 
             if (si, di) in added_edges[batch] or (di, si) in added_edges[batch]:
+                # print("Edge pair", (si, di), "already present for batch ", batch)
                 # assert False
+                # continue
+                molecules[batch] = None
                 continue
 
             if si==di:

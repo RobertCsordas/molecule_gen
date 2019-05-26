@@ -81,7 +81,7 @@ class Aggregator(torch.nn.Module):
 
         self.transform = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
-            # torch.nn.Tanh() # Note: not present in the paper
+            torch.nn.Tanh() # Note: not present in the paper
         )
         self.gate = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
@@ -113,8 +113,8 @@ class Aggregator(torch.nn.Module):
         return self.drop(res)
 
     def _reset_parameters(self):
-        #xavier_init(self.transform[0], torch.nn.init.calculate_gain("tanh"))
-        xavier_init(self.transform[0], 1)
+        xavier_init(self.transform[0], torch.nn.init.calculate_gain("tanh"))
+        # xavier_init(self.transform[0], 1)
         xavier_init(self.gate[0], 1)
         self.gate[0].bias.data.fill_(1)
         if self.bias_if_empty is not None:
@@ -135,10 +135,10 @@ class Propagator(torch.nn.Module):
         self.message_srcnode = torch.nn.Linear(state_size, self.message_size, bias=False)
         self.message_features = torch.nn.Linear(state_size, self.message_size, bias=False)
 
-        # self.message_layer_2 = torch.nn.Sequential(
-        #     torch.nn.Tanh(),
-        #     torch.nn.Linear(self.message_size, self.message_size)
-        # )
+        self.message_layer_2 = torch.nn.Sequential(
+            torch.nn.Tanh(),
+            torch.nn.Linear(self.message_size, self.message_size)
+        )
 
         self.dropout = torch.nn.Dropout(dropout)
         self._reset_parameters(state_size)
@@ -147,33 +147,41 @@ class Propagator(torch.nn.Module):
     def _node_update_mask(graph: Graph, mask_override: torch.ByteTensor):
         return graph.owner_masks[graph.running if mask_override is None else mask_override].sum(0)>0
 
+    def _get_messages(self, graph, src_i, dest_i, edge_features):
+        src_transformed = self.message_srcnode(graph.nodes)
+        dest_transformed = self.message_destnode(graph.nodes)
+
+        edge_src = src_transformed.index_select(dim=0, index=src_i)
+        edge_dest = dest_transformed.index_select(dim=0, index=dest_i)
+
+        messages = edge_features + edge_src + edge_dest
+        messages = self.message_layer_2(messages)  # Not present in the paper
+
+        return messages
+
     def forward(self, graph: Graph, mask_override: torch.ByteTensor = None):
         if graph.nodes.shape[0]==0 or graph.edge_features.shape[0]==0:
             return graph
 
-        src_transformed  = self.message_srcnode(graph.nodes)
-        dest_transformed  = self.message_destnode(graph.nodes)
-
-        edge_src = src_transformed.index_select(dim=0, index=graph.edge_source)
-        edge_dest = dest_transformed.index_select(dim=0, index=graph.edge_dest)
-
         edge_features = self.message_features(graph.edge_features)
 
-        messages = edge_src + edge_dest + edge_features
-        # messages = self.message_layer_2(messages) # Not present in the paper
-        # In case of multiple layers, subsequent layers should come here
+        msg1 = self._get_messages(graph, graph.edge_source, graph.edge_dest, edge_features)
+        msg2 = self._get_messages(graph, graph.edge_dest, graph.edge_source, edge_features)
 
+        messages = (msg1 + msg2)/2
         messages = self.dropout(messages)
+
         # Sum the messages for each node
         inputs = torch.zeros(graph.nodes.shape[0], self.message_size, device=graph.nodes.device,
-                             dtype=graph.nodes.dtype).index_add_(0, graph.edge_dest, messages)
+                             dtype=graph.nodes.dtype).index_add_(0, graph.edge_dest, messages).\
+                             index_add_(0, graph.edge_source, messages)
 
         # Normalize sum of messages by the number of nodes
         norm = torch.zeros(graph.nodes.shape[0], device=graph.nodes.device, dtype=torch.float32).\
-               index_add_(0, graph.edge_dest, torch.ones(*graph.edge_dest.shape, device=graph.device, dtype=torch.float32))
+               index_add_(0, graph.edge_dest, torch.ones(*graph.edge_dest.shape, device=graph.device, dtype=torch.float32)).\
+               index_add_(0, graph.edge_source, torch.ones(*graph.edge_dest.shape, device=graph.device, dtype=torch.float32))
 
         inputs = inputs / norm.unsqueeze(-1).clamp(min=1) # Note: not present in the paper
-
         inputs = self.dropout(inputs)
 
         # Transform node state of running nodes
@@ -183,11 +191,12 @@ class Propagator(torch.nn.Module):
         return graph
 
     def _reset_parameters(self, state_size):
-        msg_gain = 1# torch.nn.init.calculate_gain("tanh")
+        # msg_gain = 1
+        msg_gain = torch.nn.init.calculate_gain("tanh")
         xavier_init(self.message_destnode, msg_gain, state_size * 3, self.message_size)
         xavier_init(self.message_srcnode, msg_gain, state_size * 3, self.message_size)
         xavier_init(self.message_features, msg_gain, state_size * 3, self.message_size)
-        # xavier_init(self.message_layer_2[1], 1)
+        xavier_init(self.message_layer_2[1], 1)
 
 
 class MultilayerPropagator(torch.nn.Module):
@@ -364,17 +373,18 @@ class EdgeAdder(torch.nn.Module):
 
             feature = self.edge_init.index_select(0, (type.long()-1).clamp(min=0))
 
-            graph.edge_dest = torch.cat((graph.edge_dest, selected_src, selected_other), 0)
-            graph.edge_source = torch.cat((graph.edge_source, selected_other, selected_src), 0)
-            graph.edge_features = torch.cat((graph.edge_features, feature, feature), 0)
-
-            # graph.edge_dest = torch.cat((graph.edge_dest, selected_src), 0)
-            # graph.edge_source = torch.cat((graph.edge_source, selected_other), 0)
-            # graph.edge_features = torch.cat((graph.edge_features, feature), 0)
-
             type = type.byte()
-            # graph.edge_types = torch.cat((graph.edge_types, type), 0)
-            graph.edge_types = torch.cat((graph.edge_types, type, type), 0)
+            # graph.edge_dest = torch.cat((graph.edge_dest, selected_src, selected_other), 0)
+            # graph.edge_source = torch.cat((graph.edge_source, selected_other, selected_src), 0)
+            # graph.edge_features = torch.cat((graph.edge_features, feature, feature), 0)
+
+            #graph.edge_types = torch.cat((graph.edge_types, type, type), 0)
+
+            graph.edge_dest = torch.cat((graph.edge_dest, selected_src), 0)
+            graph.edge_source = torch.cat((graph.edge_source, selected_other), 0)
+            graph.edge_features = torch.cat((graph.edge_features, feature), 0)
+
+            graph.edge_types = torch.cat((graph.edge_types, type), 0)
 
 
             add_index += 1
