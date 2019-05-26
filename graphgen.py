@@ -65,6 +65,7 @@ def sample_binary(tensor):
     return torch.rand_like(tensor) < tensor
 
 def xavier_init(layer, scale, n_inputs=None, n_outputs=None):
+    # return
     n_inputs = n_inputs if n_inputs is not None else layer.weight.shape[1]
     n_outputs = n_outputs if n_outputs is not None else layer.weight.shape[0]
     limits = scale * math.sqrt(6.0 / (n_inputs + n_outputs))
@@ -75,7 +76,7 @@ def xavier_init(layer, scale, n_inputs=None, n_outputs=None):
 
 
 class Aggregator(torch.nn.Module):
-    def __init__(self, state_size, aggregated_size, dropout):
+    def __init__(self, state_size, aggregated_size, dropout, bias_if_empty=False):
         super().__init__()
 
         self.transform = torch.nn.Sequential(
@@ -87,6 +88,8 @@ class Aggregator(torch.nn.Module):
             torch.nn.Sigmoid()
         )
 
+        self.bias_if_empty = torch.nn.Parameter(torch.Tensor(1,state_size)) if bias_if_empty else None
+
         self.drop = torch.nn.Dropout(dropout)
 
         self.state_size = aggregated_size
@@ -94,6 +97,9 @@ class Aggregator(torch.nn.Module):
 
     def forward(self, graph: Graph):
         if graph.nodes.shape[0]==0:
+            # if self.bias_if_empty is not None:
+                # return self.bias_if_empty.expand(graph.batch_size, -1)
+            # else:
             return torch.zeros(graph.batch_size, self.state_size, dtype=torch.float32, device=graph.device)
 
         gates = self.gate(graph.nodes)
@@ -107,8 +113,12 @@ class Aggregator(torch.nn.Module):
         return self.drop(res)
 
     def _reset_parameters(self):
-        xavier_init(self.transform[0], torch.nn.init.calculate_gain("tanh"))
+        #xavier_init(self.transform[0], torch.nn.init.calculate_gain("tanh"))
+        xavier_init(self.transform[0], 1)
         xavier_init(self.gate[0], 1)
+        self.gate[0].bias.data.fill_(1)
+        if self.bias_if_empty is not None:
+            torch.nn.init.normal_(self.bias_if_empty)
 
 
 class Propagator(torch.nn.Module):
@@ -198,8 +208,8 @@ class NodeAdder(torch.nn.Module):
         self.pad_char = pad_char
 
         self.propagator = MultilayerPropagator(state_size, propagate_steps, dropout)
-        self.decision_aggregator = Aggregator(state_size, aggregated_size, dropout)
-        self.init_aggregator = Aggregator(state_size, aggregated_size, dropout)
+        self.decision_aggregator = Aggregator(state_size, aggregated_size, dropout, bias_if_empty=True)
+        self.init_aggregator = Aggregator(state_size, aggregated_size, dropout, bias_if_empty=True)
 
         self.node_type_decision = torch.nn.Linear(aggregated_size, n_node_types+1)
 
@@ -279,6 +289,14 @@ class EdgeAdder(torch.nn.Module):
         self.fs_layer1_target = torch.nn.Linear(state_size, n_edge_dtypes)
         self.fs_layer1_new = torch.nn.Linear(state_size, n_edge_dtypes, bias=False)
 
+        # self.fs_layer1_target = torch.nn.Linear(state_size, (state_size+n_edge_dtypes)//2)
+        # self.fs_layer1_new = torch.nn.Linear(state_size, (state_size+n_edge_dtypes)//2, bias=False)
+
+        # self.fs_rest = torch.nn.Sequential(
+        #     torch.nn.Tanh(),
+        #     torch.nn.Linear((state_size+n_edge_dtypes)//2, n_edge_dtypes)
+        # )
+
         self._reset_paramters(state_size, aggregated_size, n_edge_dtypes)
 
     def forward(self, graph: Graph, reference):
@@ -295,7 +313,6 @@ class EdgeAdder(torch.nn.Module):
 
         while True:
             graph = self.propagator(graph, running)
-
             new_edge_needed = (self.f_addedge_aggregated(self.edge_decision_aggregator(graph)) +
                                self.f_addedge_new(new_nodes)).squeeze(-1)
 
@@ -320,6 +337,8 @@ class EdgeAdder(torch.nn.Module):
             # fs_layer1_target(all_other_nodes) + fs_layer1_new(new_node).
 
             logits = self.fs_layer1_target(graph.nodes).unsqueeze(0) + self.fs_layer1_new(new_nodes).unsqueeze(1)
+            # logits = logits + self.fs_layer1_new(graph.nodes).unsqueeze(0) + self.fs_layer1_target(new_nodes).unsqueeze(1)
+            # logits = self.fs_rest(logits)
             logits = logits.view(logits.shape[0], -1)
 
             # Logits is a [batch_size, n_nodes * n_edge_types] tensor. A softmax over all of this is done, and
@@ -349,8 +368,14 @@ class EdgeAdder(torch.nn.Module):
             graph.edge_source = torch.cat((graph.edge_source, selected_other, selected_src), 0)
             graph.edge_features = torch.cat((graph.edge_features, feature, feature), 0)
 
+            # graph.edge_dest = torch.cat((graph.edge_dest, selected_src), 0)
+            # graph.edge_source = torch.cat((graph.edge_source, selected_other), 0)
+            # graph.edge_features = torch.cat((graph.edge_features, feature), 0)
+
             type = type.byte()
+            # graph.edge_types = torch.cat((graph.edge_types, type), 0)
             graph.edge_types = torch.cat((graph.edge_types, type, type), 0)
+
 
             add_index += 1
 
@@ -362,6 +387,10 @@ class EdgeAdder(torch.nn.Module):
         xavier_init(self.f_addedge_new, 1, state_size + aggregated_size, 1)
         xavier_init(self.fs_layer1_target, 1, state_size * 2, n_edge_dtypes)
         xavier_init(self.fs_layer1_new, 1, state_size * 2, n_edge_dtypes)
+        # xavier_init(self.fs_layer1_target, torch.nn.init.calculate_gain("tanh"), state_size * 2)
+        # xavier_init(self.fs_layer1_new, torch.nn.init.calculate_gain("tanh"), state_size * 2)
+        # xavier_init(self.fs_rest[1], 1)
+        
 
 
 class GraphGen(torch.nn.Module):

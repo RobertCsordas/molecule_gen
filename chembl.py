@@ -20,6 +20,7 @@ class Chembl(torch.utils.data.Dataset):
     CACHE_DIR = "./cache"
     DOWNLOAD_TO = "./cache/chembl/chembl_25_chemreps.txt.gz"
     PROCESSED_FILE = "./cache/chembl/chembl_25.pth"
+    # SPLITS = [0.000005*2, 0.01, 0.004]
     SPLITS = [0.5, 0.1, 0.4]
     SPLIT_NAMES = ["train", "valid", "test"]
     PAD_CHAR = 255
@@ -33,6 +34,23 @@ class Chembl(torch.utils.data.Dataset):
         end = start + int(l*self.SPLITS[set_i])
         return array[start:end]
 
+    @staticmethod
+    def _atom_type_to_str(atom):
+        nh = atom.GetNumExplicitHs()
+        if nh!=0:
+            # print(atom.GetSymbol()+":H"+str(nh))
+            return atom.GetSymbol()+":H"+str(nh)
+        else:
+            return atom.GetSymbol()
+
+    @staticmethod
+    def _str_to_atom(str):
+        d = str.split(":H")
+        a = Chem.Atom(d[0])
+        if len(d)>1:
+            a.SetNumExplicitHs(int(d[1]))
+        return a
+    
     def __init__(self, split="train", max_atoms=20, random_order=False, verify_in_process=False):
         super().__init__()
         self.verify_in_process = verify_in_process
@@ -73,11 +91,17 @@ class Chembl(torch.utils.data.Dataset):
 
                         Chem.SanitizeMol(m)
 
+                        failed = False
                         for a in m.GetAtoms():
+                            if a.GetNumExplicitHs()!=0 or a.GetFormalCharge()!=0:
+                                failed = True
+                            # atom_types.add(self._atom_type_to_str(a))
                             atom_types.add(a.GetSymbol())
                             for b in a.GetBonds():
                                 bond_types.add(b.GetBondType())
 
+                        if failed:
+                            continue
                         canonical_smiles = Chem.MolToSmiles(m)
                         self.dataset["smiles"].append(canonical_smiles)
                         self.dataset["heavy_atom_count"].append(m.GetNumHeavyAtoms())
@@ -135,18 +159,20 @@ class Chembl(torch.utils.data.Dataset):
 
         m = Chem.MolFromSmiles(self.used_set[item])
         Chem.SanitizeMol(m)
-
-        atom_to_index = {}
+        # Chem.Kekulize(m)
+        # self.ver_mol(m)
 
         atoms = m.GetAtoms()
         iterator = self.seed.choice(len(atoms), len(atoms), replace=False).tolist() if self.random_order else\
                    range(len(atoms))
 
-        next_atom_index = 0
         for ai in iterator:
             atom = atoms[ai]
-            atom_to_index[atom.GetIdx()] = next_atom_index
-            type = self.dataset["atom_type_to_id"][atom.GetSymbol()]
+            assert atom.GetIdx() == ai
+
+            # symbol = self._atom_type_to_str(atom)
+            symbol = atom.GetSymbol()
+            type = self.dataset["atom_type_to_id"][symbol]
             bonds = atom.GetBonds()
             edges = []
 
@@ -160,20 +186,162 @@ class Chembl(torch.utils.data.Dataset):
                 if other_atom == atom.GetIdx():
                     other_atom = bond.GetEndAtomIdx()
 
-                other_atom_local_index = atom_to_index.get(other_atom)
-                if other_atom_local_index is not None:
-                    edges.append((other_atom_local_index, self.dataset["bond_type_to_id"][bond.GetBondType()]))
+                if other_atom < ai:
+                    edges.append((other_atom, self.dataset["bond_type_to_id"][bond.GetBondType()]))
 
             # Termination node for the edges
             edges.append((0, self.PAD_CHAR))
             schema.append(type)
             schema.append(edges)
 
-            next_atom_index += 1
-
         # Node termination
         schema.append(self.PAD_CHAR)
+        # self.ver_schema(schema)
         return schema
+
+    @staticmethod
+    def add_formal_charges(m):
+        # return m
+        m.UpdatePropertyCache(strict=False)
+        for at in m.GetAtoms():
+            if at.GetAtomicNum() == 7:
+                print("VAL", at.GetExplicitValence())
+                print("iVAL", at.GetImplicitValence())
+                print("Charge", at.GetFormalCharge())
+            if at.GetAtomicNum() == 7 and at.GetExplicitValence()==4 and at.GetFormalCharge()==0:
+                print("FIIIIX")
+                at.SetFormalCharge(1)
+
+    def ver_mol(self, mol):
+        # mol = Chem.MolFromSmiles("[Ga-][As+]")
+        Chem.SanitizeMol(mol)
+        Chem.Kekulize(mol)
+
+        mol_res = Chem.RWMol()
+
+        # atoms = mol.GetAtoms()
+        # for ai in range(len(atoms)):
+        #     atom = atoms[ai]
+        #     #mol_res.AddAtom(Chem.Atom(atom.GetSymbol()))
+        #     mol_res.AddAtom(Chem.Atom(atom.GetAtomicNum()))
+        #     # mol_res.AddAtom(atom)
+
+        #     bonds = atom.GetBonds()
+        #     for bi in range(len(bonds)):
+        #         bond = bonds[bi]
+
+        #         if bond.GetBeginAtomIdx() < ai or bond.GetEndAtomIdx() < ai:
+        #             assert bond.GetBeginAtomIdx()==ai or bond.GetEndAtomIdx()==ai
+        #             mol_res.AddBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), bond.GetBondType())
+
+        #         # other_atom = bond.GetBeginAtomIdx()
+        #         # if other_atom == atom.GetIdx():
+        #         #     other_atom = bond.GetEndAtomIdx()
+
+        #         # if other_atom<ai:
+        #         #     btype = bond.GetBondType()
+        #         #     mol_res.AddBond(ai, other_atom, btype)
+
+        for i, a in enumerate(mol.GetAtoms()):
+            newa = Chem.Atom(a.GetSymbol())
+            # newa.SetFormalCharge(a.GetFormalCharge())
+            print(a.GetFormalCharge())
+            # newa.SetIsAromatic(a.GetIsAromatic())
+            # newa.SetFormalCharge(a.GetFormalCharge())
+            # newa.SetNumExplicitHs(a.GetNumExplicitHs())
+            mol_res.AddAtom(newa)
+
+        for b in mol.GetBonds():
+            mol_res.AddBond(b.GetBeginAtomIdx(), b.GetEndAtomIdx(), b.GetBondType())
+
+        assert mol.GetNumAtoms() == mol_res.GetNumAtoms()
+        assert mol.GetNumBonds() == mol_res.GetNumBonds()
+
+        print([a.GetSymbol() for a in mol.GetAtoms()])
+        print([a.GetSymbol() for a in mol_res.GetAtoms()])
+
+        #for b in int(range(GetNumBonds)):
+        #    mol.GetBond
+        
+        Chem.SanitizeMol(mol_res, Chem.rdmolops.SanitizeFlags.SANITIZE_SETAROMATICITY)
+        Chem.SanitizeMol(mol_res, Chem.rdmolops.SanitizeFlags.SANITIZE_SETCONJUGATION)
+        Chem.SanitizeMol(mol_res, Chem.rdmolops.SanitizeFlags.SANITIZE_SETHYBRIDIZATION)
+        #Chem.SanitizeMol(mol_res, Chem.rdmolops.SanitizeFlags.SANITIZE_PROPERTIES)
+        Chem.SanitizeMol(mol_res, Chem.rdmolops.SanitizeFlags.SANITIZE_FINDRADICALS)
+
+        print(Chem.MolToSmiles(mol))
+        print(Chem.MolToSmiles(mol_res))
+        #mol_res=Chem.MolFromSmiles(Chem.MolToSmiles(mol_res))
+
+        
+        self.add_formal_charges(mol_res)
+        Chem.SanitizeMol(mol_res)
+        print("PASSED2")
+
+    def ver_schema(self, schema):
+        return
+        mol = Chem.RWMol()
+        for i, s in enumerate(schema):
+            if i % 2 == 0:
+                if s!=self.PAD_CHAR:
+                    mol.AddAtom(Chem.Atom(self.dataset["id_to_atom_type"][s]))
+            else:
+                for e in s:
+                    if e[1]!=self.PAD_CHAR:
+                        mol.AddBond(i//2, e[0], self.dataset["id_to_bond_type"][e[1]])
+        
+        self.add_formal_charges(mol)
+        Chem.SanitizeMol(mol)
+        print("PASSED")
+
+# molecules = [Chem.RWMol() for i in range(graph.batch_size)]
+#         atom_counts = [0 for i in range(graph.batch_size)]
+
+#         atoms = graph.node_types.cpu().numpy().tolist()
+#         owners = graph.owner_masks.max(0)[1].cpu().numpy().tolist()
+
+#         atom_maps = {}
+#         for i, a in enumerate(atoms):
+#             molecules[owners[i]].AddAtom(Chem.Atom(self.dataset["id_to_atom_type"][a]))
+#             atom_maps[i] = (owners[i], atom_counts[owners[i]])
+#             atom_counts[owners[i]] += 1
+
+#         edge_src = graph.edge_source.cpu().numpy().tolist()
+#         edge_dest = graph.edge_dest.cpu().numpy().tolist()
+#         edge_type = graph.edge_types.cpu().numpy().tolist()
+
+#         # Edges are directed. So each edge is present 2 times in edge_*. Filter them out
+#         added_edges = [set() for i in range(graph.batch_size)]
+#         for i, etype in enumerate(edge_type):
+#             batch, si = atom_maps[edge_src[i]]
+#             batch2, di = atom_maps[edge_dest[i]]
+
+#             assert batch==batch2, "Cross batch edge?! %d, %d" % (batch, batch2)
+
+#             if molecules[batch] is None:
+#                 continue
+
+#             if (si, di) in added_edges[batch] or (di, si) in added_edges[batch]:
+#                 # assert False
+#                 continue
+
+#             if si==di:
+#                 molecules[batch] = None
+#                 continue
+
+#             added_edges[batch].add((si,di))
+#             molecules[batch].AddBond(si, di, self.dataset["id_to_bond_type"][etype])
+
+#         # Sanitize the molecule
+#         final = []
+#         for m in molecules:
+#             try:
+#                 Chem.SanitizeMol(m)
+#                 final.append(m)
+#             except:
+#                 final.append(None)
+
+#         return final
 
 
     @classmethod
@@ -282,7 +450,8 @@ class Chembl(torch.utils.data.Dataset):
 
         atom_maps = {}
         for i, a in enumerate(atoms):
-            molecules[owners[i]].AddAtom(Chem.Atom(self.dataset["id_to_atom_type"][a]))
+            #molecules[owners[i]].AddAtom(Chem.Atom(self.dataset["id_to_atom_type"][a]))
+            molecules[owners[i]].AddAtom(self._str_to_atom(self.dataset["id_to_atom_type"][a]))
             atom_maps[i] = (owners[i], atom_counts[owners[i]])
             atom_counts[owners[i]] += 1
 
@@ -302,6 +471,7 @@ class Chembl(torch.utils.data.Dataset):
                 continue
 
             if (si, di) in added_edges[batch] or (di, si) in added_edges[batch]:
+                # assert False
                 continue
 
             if si==di:
@@ -321,6 +491,14 @@ class Chembl(torch.utils.data.Dataset):
                 final.append(None)
 
         return final
+
+    def all_graphs_ok(self, graph):
+        molecules = self.graph_to_molecules(graph)
+        for m in molecules:
+            if m is None:
+                print([m is not None for m in molecules])
+                return False
+        return True
 
     def _verify(self, v, graph):
         # Count valid, new and unique molecules.

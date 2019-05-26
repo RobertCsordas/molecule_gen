@@ -175,6 +175,7 @@ class Experiment:
                 g, loss = self.model(d)
                 assert torch.isfinite(loss), "Loss is %s" % loss.item()
 
+                # assert self.train_set.all_graphs_ok(g)
                 self.loss_plot.add_point(self.iteration, loss.item())
 
                 self.optimizer.zero_grad()
