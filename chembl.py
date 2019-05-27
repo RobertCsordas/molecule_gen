@@ -51,8 +51,9 @@ class Chembl(torch.utils.data.Dataset):
             a.SetNumExplicitHs(int(d[1]))
         return a
     
-    def __init__(self, split="train", max_atoms=20, random_order=False, verify_in_process=False):
+    def __init__(self, split="train", max_atoms=20, random_order=False, verify_in_process=False, kekulize=False):
         super().__init__()
+        self.kekulize = kekulize
         self.verify_in_process = verify_in_process
         assert split in self.SPLIT_NAMES, "Invalid set: %s" % split
 
@@ -159,7 +160,8 @@ class Chembl(torch.utils.data.Dataset):
 
         m = Chem.MolFromSmiles(self.used_set[item])
         Chem.SanitizeMol(m)
-        # Chem.Kekulize(m)
+        if self.kekulize:
+            Chem.Kekulize(m)
         # self.ver_mol(m)
 
         atoms = m.GetAtoms()

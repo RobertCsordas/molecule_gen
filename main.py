@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 
-import torch
 import gc
+import os
+from tqdm import tqdm
+import torch
 from chembl import Chembl
 from graphgen import GraphGen
-from tqdm import tqdm
 from saver import Saver
 from visdom_helper import Plot2D, Image
 from argument_parser import ArgumentParser
-import os
 
 parser = ArgumentParser(description='Process some integers.')
-parser.add_argument("-lr", type=float, default=1e-4)
+parser.add_argument("-lr", type=float, default=3e-4)
 parser.add_argument("-wd", type=float, default=0)
 parser.add_argument("-optimizer", default="adam")
 parser.add_argument("-batch_size", type=int, default=128)
@@ -23,6 +23,7 @@ parser.add_argument("-lr_gamma", default=0.3)
 parser.add_argument("-dropout", default=0.0)
 parser.add_argument("-state_size", default=128)
 parser.add_argument("-early_stop", type=bool, default=1)
+parser.add_argument("-kekulize", type=bool, default=0)
 opt = parser.parse_and_sync()
 
 
@@ -36,9 +37,9 @@ class Experiment:
         self.opt = opt
         self.device = torch.device("cpu" if opt.gpu=="" or not torch.cuda.is_available() else "cuda")
 
-        self.train_set = Chembl("train")
-        self.valid_set = Chembl("valid")
-        self.test_set = Chembl("test")
+        self.train_set = Chembl("train", kekulize=opt.kekulize)
+        self.valid_set = Chembl("valid", kekulize=opt.kekulize)
+        self.test_set = Chembl("test", kekulize=opt.kekulize)
         self.train_loader = torch.utils.data.DataLoader(self.train_set, batch_size=opt.batch_size, shuffle=True,
                                                         collate_fn=Chembl.collate, num_workers=1, pin_memory=True)
         self.valid_loader = torch.utils.data.DataLoader(self.valid_set, batch_size=256, shuffle=False,
@@ -51,7 +52,7 @@ class Experiment:
         self.model = self.model.to(self.device)
 
         if opt.optimizer == "adam":
-            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=opt.lr, weight_decay=opt.wd)
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=opt.lr, weight_decay=opt.wd, eps=1e-10)
         elif opt.optimizer == "sgd":
             self.optimizer = torch.optim.SGD(self.model.parameters(), lr=opt.lr, momentum=0.99, nesterov=True)
         else:
