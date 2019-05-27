@@ -22,6 +22,7 @@ parser.add_argument("-lr_milestones", default="none", parser=ArgumentParser.int_
 parser.add_argument("-lr_gamma", default=0.3)
 parser.add_argument("-dropout", default=0.0)
 parser.add_argument("-state_size", default=128)
+parser.add_argument("-early_stop", type=bool, default=1)
 opt = parser.parse_and_sync()
 
 
@@ -175,7 +176,6 @@ class Experiment:
                 g, loss = self.model(d)
                 assert torch.isfinite(loss), "Loss is %s" % loss.item()
 
-                # assert self.train_set.all_graphs_ok(g)
                 self.loss_plot.add_point(self.iteration, loss.item())
 
                 self.optimizer.zero_grad()
@@ -200,7 +200,7 @@ class Experiment:
                 self.best_loss_iteration = self.iteration
                 self.best_loss_epoch = self.epoch
             elif (self.epoch - self.best_loss_epoch) > self.patience:
-                running = False
+                running = not opt.early_stop
 
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
