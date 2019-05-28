@@ -81,7 +81,7 @@ class Aggregator(torch.nn.Module):
 
         self.transform = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
-            torch.nn.Tanh() # Note: not present in the paper
+            # torch.nn.Tanh() # Note: not present in the paper
         )
         self.gate = torch.nn.Sequential(
             torch.nn.Linear(state_size, aggregated_size),
@@ -113,8 +113,8 @@ class Aggregator(torch.nn.Module):
         return self.drop(res)
 
     def _reset_parameters(self):
-        xavier_init(self.transform[0], torch.nn.init.calculate_gain("tanh"))
-        # xavier_init(self.transform[0], 1)
+        # xavier_init(self.transform[0], torch.nn.init.calculate_gain("tanh"))
+        xavier_init(self.transform[0], 1)
         xavier_init(self.gate[0], 1)
         self.gate[0].bias.data.fill_(1)
         if self.bias_if_empty is not None:

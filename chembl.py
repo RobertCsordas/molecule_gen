@@ -168,15 +168,18 @@ class Chembl(torch.utils.data.Dataset):
         iterator = self.seed.choice(len(atoms), len(atoms), replace=False).tolist() if self.random_order else\
                    range(len(atoms))
 
+        atom_to_new_id = {}
+        next_id = 0
         for ai in iterator:
             atom = atoms[ai]
-            assert atom.GetIdx() == ai
 
             # symbol = self._atom_type_to_str(atom)
             symbol = atom.GetSymbol()
             type = self.dataset["atom_type_to_id"][symbol]
             bonds = atom.GetBonds()
             edges = []
+
+            atom_to_new_id[ai] = next_id
 
             iter2 = self.seed.choice(len(bonds), len(bonds), replace=False).tolist() if self.random_order else\
                    range(len(bonds))
@@ -188,13 +191,16 @@ class Chembl(torch.utils.data.Dataset):
                 if other_atom == atom.GetIdx():
                     other_atom = bond.GetEndAtomIdx()
 
-                if other_atom < ai:
-                    edges.append((other_atom, self.dataset["bond_type_to_id"][bond.GetBondType()]))
+                other_atom_id = atom_to_new_id.get(other_atom)
+                if other_atom_id is not None:
+                    edges.append((other_atom_id, self.dataset["bond_type_to_id"][bond.GetBondType()]))
 
             # Termination node for the edges
             edges.append((0, self.PAD_CHAR))
             schema.append(type)
             schema.append(edges)
+
+            next_id += 1
 
         # Node termination
         schema.append(self.PAD_CHAR)

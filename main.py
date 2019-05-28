@@ -24,6 +24,7 @@ parser.add_argument("-dropout", default=0.0)
 parser.add_argument("-state_size", default=128)
 parser.add_argument("-early_stop", type=bool, default=1)
 parser.add_argument("-kekulize", type=bool, default=0)
+parser.add_argument("-random_order", type=bool, default=0)
 opt = parser.parse_and_sync()
 
 
@@ -37,9 +38,9 @@ class Experiment:
         self.opt = opt
         self.device = torch.device("cpu" if opt.gpu=="" or not torch.cuda.is_available() else "cuda")
 
-        self.train_set = Chembl("train", kekulize=opt.kekulize)
-        self.valid_set = Chembl("valid", kekulize=opt.kekulize)
-        self.test_set = Chembl("test", kekulize=opt.kekulize)
+        self.train_set = Chembl("train", kekulize=opt.kekulize, random_order=opt.random_order)
+        self.valid_set = Chembl("valid", kekulize=opt.kekulize, random_order=opt.random_order)
+        self.test_set = Chembl("test", kekulize=opt.kekulize, random_order=opt.random_order)
         self.train_loader = torch.utils.data.DataLoader(self.train_set, batch_size=opt.batch_size, shuffle=True,
                                                         collate_fn=Chembl.collate, num_workers=1, pin_memory=True)
         self.valid_loader = torch.utils.data.DataLoader(self.valid_set, batch_size=256, shuffle=False,
